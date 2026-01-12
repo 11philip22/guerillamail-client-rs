@@ -1,4 +1,7 @@
-# guerrillamail-rs
+# guerrillamail-client
+
+[![Crates.io](https://img.shields.io/crates/v/guerrillamail-client.svg)](https://crates.io/crates/guerrillamail-client)
+[![Documentation](https://docs.rs/guerrillamail-client/badge.svg)](https://docs.rs/guerrillamail-client)
 
 ![GuerrillaMail](https://img.guerrillamail.com/4/6/f/46f9fd8911b3a915c1fec119e9062d00.png)
 
