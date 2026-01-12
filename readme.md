@@ -50,42 +50,6 @@ async fn main() -> Result<(), guerrillamail::Error> {
 }
 ```
 
-## API
-
-### `Client::new()`
-Create a new GuerrillaMail client.
-
-### `Client::with_proxy(proxy: Option<&str>)`
-Create a client with an optional HTTP proxy.
-
-```rust
-let client = Client::with_proxy(Some("http://127.0.0.1:8080")).await?;
-```
-
-### `client.domains()`
-Get the list of available email domains.
-
-### `client.create_email(alias, domain)`
-Create a temporary email. If `domain` is `None`, the server assigns one.
-
-### `client.get_messages(email)`
-Retrieve all messages for an email address.
-
-### `client.delete_email(email)`
-Delete/forget an email address.
-
-## Message Fields
-
-```rust
-pub struct Message {
-    pub mail_id: String,
-    pub mail_from: String,
-    pub mail_subject: String,
-    pub mail_excerpt: String,
-    pub mail_timestamp: String,
-}
-```
-
 ## License
 
 MIT License - see [license](license) for details.
