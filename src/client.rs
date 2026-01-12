@@ -9,6 +9,7 @@ use reqwest::header::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 const BASE_URL: &str = "https://www.guerrillamail.com";
+const AJAX_URL: &str = "https://www.guerrillamail.com/ajax.php";
 const USER_AGENT_VALUE: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0";
 
@@ -102,7 +103,7 @@ impl Client {
 
         let response: serde_json::Value = self
             .http
-            .post(format!("{}/ajax.php", BASE_URL))
+            .post(AJAX_URL)
             .query(&params)
             .form(&form)
             .headers(self.headers())
@@ -112,14 +113,11 @@ impl Client {
             .json()
             .await?;
 
-        // Parse actual email from response
-        let email_addr = response
+        response
             .get("email_addr")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or(Error::TokenParse)?;
-
-        Ok(email_addr)
+            .ok_or(Error::TokenParse)
     }
 
     /// Get messages for an email address.
@@ -130,35 +128,8 @@ impl Client {
     /// # Returns
     /// A list of messages in the inbox
     pub async fn get_messages(&self, email: &str) -> Result<Vec<Message>> {
-        let alias = email.split('@').next().unwrap_or(email);
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let response = self.get_api("check_email", email, None).await?;
 
-        let params = [
-            ("f", "check_email"),
-            ("seq", "1"),
-            ("site", "guerrillamail.com"),
-            ("in", alias),
-            ("_", &timestamp.to_string()),
-        ];
-
-        let mut headers = self.headers();
-        headers.remove(CONTENT_TYPE);
-
-        let response: serde_json::Value = self
-            .http
-            .get(format!("{}/ajax.php", BASE_URL))
-            .query(&params)
-            .headers(headers)
-            .send()
-            .await?
-            .error_for_status()?
-            .json()
-            .await?;
-
-        // Parse messages from the "list" field if present
         let messages = response
             .get("list")
             .and_then(|v| v.as_array())
@@ -172,31 +143,6 @@ impl Client {
         Ok(messages)
     }
 
-    /// Delete/forget an email address.
-    ///
-    /// # Arguments
-    /// * `email` - The full email address to delete
-    ///
-    /// # Returns
-    /// `true` if deletion was successful
-    pub async fn delete_email(&self, email: &str) -> Result<bool> {
-        let alias = email.split('@').next().unwrap_or(email);
-
-        let params = [("f", "forget_me")];
-        let form = [("site", "guerrillamail.com"), ("in", alias)];
-
-        let response = self
-            .http
-            .post(format!("{}/ajax.php", BASE_URL))
-            .query(&params)
-            .form(&form)
-            .headers(self.headers())
-            .send()
-            .await?;
-
-        Ok(response.status().is_success())
-    }
-
     /// Fetch the full content of a specific email.
     ///
     /// # Arguments
@@ -206,37 +152,89 @@ impl Client {
     /// # Returns
     /// The full email details including the body
     pub async fn fetch_email(&self, email: &str, mail_id: &str) -> Result<crate::EmailDetails> {
-        let alias = email.split('@').next().unwrap_or(email);
-        let timestamp = SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .unwrap()
-            .as_millis();
+        let response = self.get_api("fetch_email", email, Some(mail_id)).await?;
+        serde_json::from_value(response).map_err(|_| Error::TokenParse)
+    }
 
-        let params = [
-            ("f", "fetch_email"),
-            ("email_id", mail_id),
-            ("site", "guerrillamail.com"),
-            ("in", alias),
-            ("_", &timestamp.to_string()),
+    /// Delete/forget an email address.
+    ///
+    /// # Arguments
+    /// * `email` - The full email address to delete
+    ///
+    /// # Returns
+    /// `true` if deletion was successful
+    pub async fn delete_email(&self, email: &str) -> Result<bool> {
+        let alias = Self::extract_alias(email);
+        let params = [("f", "forget_me")];
+        let form = [("site", "guerrillamail.com"), ("in", alias)];
+
+        let response = self
+            .http
+            .post(AJAX_URL)
+            .query(&params)
+            .form(&form)
+            .headers(self.headers())
+            .send()
+            .await?;
+
+        Ok(response.status().is_success())
+    }
+
+    /// Common GET API request pattern.
+    async fn get_api(
+        &self,
+        function: &str,
+        email: &str,
+        email_id: Option<&str>,
+    ) -> Result<serde_json::Value> {
+        let alias = Self::extract_alias(email);
+        let timestamp = Self::timestamp();
+
+        let mut params = vec![
+            ("f", function.to_string()),
+            ("site", "guerrillamail.com".to_string()),
+            ("in", alias.to_string()),
+            ("_", timestamp),
         ];
+
+        if let Some(id) = email_id {
+            params.insert(1, ("email_id", id.to_string()));
+        }
+
+        if function == "check_email" {
+            params.insert(1, ("seq", "1".to_string()));
+        }
 
         let mut headers = self.headers();
         headers.remove(CONTENT_TYPE);
 
-        let response: serde_json::Value = self
-            .http
-            .get(format!("{}/ajax.php", BASE_URL))
+        self.http
+            .get(AJAX_URL)
             .query(&params)
             .headers(headers)
             .send()
             .await?
             .error_for_status()?
             .json()
-            .await?;
-
-        serde_json::from_value(response).map_err(|_| Error::TokenParse)
+            .await
+            .map_err(Into::into)
     }
 
+    /// Extract alias from email address.
+    fn extract_alias(email: &str) -> &str {
+        email.split('@').next().unwrap_or(email)
+    }
+
+    /// Generate timestamp for cache-busting.
+    fn timestamp() -> String {
+        SystemTime::now()
+            .duration_since(UNIX_EPOCH)
+            .unwrap()
+            .as_millis()
+            .to_string()
+    }
+
+    /// Build headers for API requests.
     fn headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(HOST, HeaderValue::from_static("www.guerrillamail.com"));
