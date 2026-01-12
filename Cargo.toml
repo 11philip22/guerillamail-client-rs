@@ -1,5 +1,5 @@
 [package]
-name = "guerrillamail"
+name = "guerrillamail-client"
 version = "0.1.0"
 edition = "2021"
 description = "Async Rust client for GuerrillaMail temporary email service"

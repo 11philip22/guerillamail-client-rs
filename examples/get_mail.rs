@@ -1,6 +1,6 @@
-//! Verification example for GuerrillaMail Rust client.
+//! Example for GuerrillaMail Rust client.
 
-use guerrillamail::Client;
+use guerrillamail_client::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
