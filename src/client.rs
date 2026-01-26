@@ -13,7 +13,6 @@ use std::time::{SystemTime, UNIX_EPOCH};
 pub struct Client {
     http: reqwest::Client,
     api_token: String,
-    domains: Vec<String>,
     proxy: Option<String>,
     user_agent: String,
     ajax_url: String,
@@ -30,23 +29,6 @@ impl Client {
     /// Connects to GuerrillaMail and retrieves the API token and available domains.
     pub async fn new() -> Result<Self> {
         ClientBuilder::new().build().await
-    }
-
-    /// Create a new GuerrillaMail client with an optional proxy.
-    ///
-    /// # Arguments
-    /// * `proxy` - Optional proxy URL (e.g., "http://127.0.0.1:8080")
-    pub async fn with_proxy(proxy: Option<&str>) -> Result<Self> {
-        let mut builder = ClientBuilder::new();
-        if let Some(proxy_url) = proxy {
-            builder = builder.proxy(proxy_url);
-        }
-        builder.build().await
-    }
-
-    /// Get the list of available email domains.
-    pub fn domains(&self) -> &[String] {
-        &self.domains
     }
 
     /// Get the proxy URL if one was configured.
@@ -315,21 +297,9 @@ impl ClientBuilder {
             .map(|m| m.as_str().to_string())
             .ok_or(Error::TokenParse)?;
 
-        // Parse domain list: <option value="domain.com">
-        let domain_re = Regex::new(r#"<option value="([\w.]+)">"#).unwrap();
-        let domains: Vec<String> = domain_re
-            .captures_iter(&response)
-            .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
-            .collect();
-
-        if domains.is_empty() {
-            return Err(Error::DomainParse);
-        }
-
         Ok(Client {
             http,
             api_token,
-            domains,
             proxy: self.proxy,
             user_agent: self.user_agent,
             ajax_url: self.ajax_url,

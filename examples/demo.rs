@@ -38,15 +38,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   ✅ Connected to GuerrillaMail API");
 
     // =========================================
-    // 2. View available domains
-    // =========================================
-    println!("\n🌐 Available email domains:");
-    for domain in client.domains() {
-        println!("   - {}", domain);
-    }
-
-    // =========================================
-    // 3. Create temporary email address
+    // 2. Create temporary email address
     // =========================================
     println!("\n📬 Creating temporary email...");
     let alias = format!("demo{}", rand::random::<u16>());
@@ -54,7 +46,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     println!("   ✅ Created: {}", email);
 
     // =========================================
-    // 4. Poll for messages (get_messages)
+    // 3. Poll for messages (get_messages)
     // =========================================
     println!("\n⏳ Waiting for messages...");
     println!("   Send an email to: {}", email);
@@ -83,7 +75,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 println!("Timestamp:   {}", msg.mail_timestamp);
 
                 // =========================================
-                // 5. Fetch full email content (fetch_email)
+                // 4. Fetch full email content (fetch_email)
                 // =========================================
                 println!("\n📄 Fetching full email body...");
                 match client.fetch_email(&email, &msg.mail_id).await {
@@ -121,7 +113,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     }
 
     // =========================================
-    // 6. Delete/forget email address
+    // 5. Delete/forget email address
     // =========================================
     println!("\n🗑️  Cleaning up email address...");
     match client.delete_email(&email).await {
