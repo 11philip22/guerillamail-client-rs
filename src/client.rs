@@ -8,11 +8,6 @@ use reqwest::header::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-const BASE_URL: &str = "https://www.guerrillamail.com";
-const AJAX_URL: &str = "https://www.guerrillamail.com/ajax.php";
-const USER_AGENT_VALUE: &str =
-    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0";
-
 /// Async client for GuerrillaMail temporary email service.
 #[derive(Debug)]
 pub struct Client {
@@ -20,14 +15,21 @@ pub struct Client {
     api_token: String,
     domains: Vec<String>,
     proxy: Option<String>,
+    user_agent: String,
+    ajax_url: String,
 }
 
 impl Client {
+    /// Create a builder for configuring the client.
+    pub fn builder() -> ClientBuilder {
+        ClientBuilder::new()
+    }
+
     /// Create a new GuerrillaMail client.
     ///
     /// Connects to GuerrillaMail and retrieves the API token and available domains.
     pub async fn new() -> Result<Self> {
-        Self::with_proxy(None).await
+        ClientBuilder::new().build().await
     }
 
     /// Create a new GuerrillaMail client with an optional proxy.
@@ -35,43 +37,11 @@ impl Client {
     /// # Arguments
     /// * `proxy` - Optional proxy URL (e.g., "http://127.0.0.1:8080")
     pub async fn with_proxy(proxy: Option<&str>) -> Result<Self> {
-        let mut builder = reqwest::Client::builder().danger_accept_invalid_certs(true);
-
+        let mut builder = ClientBuilder::new();
         if let Some(proxy_url) = proxy {
-            builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
+            builder = builder.proxy(proxy_url);
         }
-
-        // Enable cookie store to persist session between requests
-        let http = builder.cookie_store(true).build()?;
-
-        // Fetch the main page to get API token and domains
-        let response = http.get(BASE_URL).send().await?.text().await?;
-
-        // Parse API token: api_token : 'xxxxxxxx'
-        let token_re = Regex::new(r"api_token\s*:\s*'(\w+)'").unwrap();
-        let api_token = token_re
-            .captures(&response)
-            .and_then(|c| c.get(1))
-            .map(|m| m.as_str().to_string())
-            .ok_or(Error::TokenParse)?;
-
-        // Parse domain list: <option value="domain.com">
-        let domain_re = Regex::new(r#"<option value="([\w.]+)">"#).unwrap();
-        let domains: Vec<String> = domain_re
-            .captures_iter(&response)
-            .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
-            .collect();
-
-        if domains.is_empty() {
-            return Err(Error::DomainParse);
-        }
-
-        Ok(Self {
-            http,
-            api_token,
-            domains,
-            proxy: proxy.map(|s| s.to_string()),
-        })
+        builder.build().await
     }
 
     /// Get the list of available email domains.
@@ -102,7 +72,7 @@ impl Client {
 
         let response: serde_json::Value = self
             .http
-            .post(AJAX_URL)
+            .post(&self.ajax_url)
             .query(&params)
             .form(&form)
             .headers(self.headers())
@@ -169,7 +139,7 @@ impl Client {
 
         let response = self
             .http
-            .post(AJAX_URL)
+            .post(&self.ajax_url)
             .query(&params)
             .form(&form)
             .headers(self.headers())
@@ -208,7 +178,7 @@ impl Client {
         headers.remove(CONTENT_TYPE);
 
         self.http
-            .get(AJAX_URL)
+            .get(&self.ajax_url)
             .query(&params)
             .headers(headers)
             .send()
@@ -237,7 +207,9 @@ impl Client {
     fn headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(HOST, HeaderValue::from_static("www.guerrillamail.com"));
-        headers.insert(USER_AGENT, HeaderValue::from_static(USER_AGENT_VALUE));
+        if let Ok(value) = HeaderValue::from_str(&self.user_agent) {
+            headers.insert(USER_AGENT, value);
+        }
         headers.insert(
             ACCEPT,
             HeaderValue::from_static("application/json, text/javascript, */*; q=0.01"),
@@ -268,5 +240,99 @@ impl Client {
         headers.insert("Sec-Fetch-Site", HeaderValue::from_static("same-origin"));
         headers.insert("Priority", HeaderValue::from_static("u=0"));
         headers
+    }
+}
+
+const BASE_URL: &str = "https://www.guerrillamail.com";
+const AJAX_URL: &str = "https://www.guerrillamail.com/ajax.php";
+const USER_AGENT_VALUE: &str =
+    "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0";
+
+/// Builder for configuring a GuerrillaMail client.
+#[derive(Debug, Clone)]
+pub struct ClientBuilder {
+    proxy: Option<String>,
+    danger_accept_invalid_certs: bool,
+    user_agent: String,
+    ajax_url: String,
+}
+
+impl ClientBuilder {
+    /// Create a new builder with default settings.
+    pub fn new() -> Self {
+        Self {
+            proxy: None,
+            danger_accept_invalid_certs: true,
+            user_agent: USER_AGENT_VALUE.to_string(),
+            ajax_url: AJAX_URL.to_string(),
+        }
+    }
+
+    /// Set a proxy URL (e.g., "http://127.0.0.1:8080").
+    pub fn proxy(mut self, proxy: impl Into<String>) -> Self {
+        self.proxy = Some(proxy.into());
+        self
+    }
+
+    /// Control whether to accept invalid TLS certificates (default: true).
+    pub fn danger_accept_invalid_certs(mut self, value: bool) -> Self {
+        self.danger_accept_invalid_certs = value;
+        self
+    }
+
+    /// Override the default user agent string.
+    pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
+        self.user_agent = user_agent.into();
+        self
+    }
+
+    /// Override the AJAX endpoint URL.
+    pub fn ajax_url(mut self, ajax_url: impl Into<String>) -> Self {
+        self.ajax_url = ajax_url.into();
+        self
+    }
+
+    /// Build the client and fetch initial API token + domains.
+    pub async fn build(self) -> Result<Client> {
+        let mut builder =
+            reqwest::Client::builder().danger_accept_invalid_certs(self.danger_accept_invalid_certs);
+
+        if let Some(proxy_url) = &self.proxy {
+            builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
+        }
+
+        // Enable cookie store to persist session between requests
+        let http = builder.cookie_store(true).build()?;
+
+        // Fetch the main page to get API token and domains
+        let response = http.get(BASE_URL).send().await?.text().await?;
+
+        // Parse API token: api_token : 'xxxxxxxx'
+        let token_re = Regex::new(r"api_token\s*:\s*'(\w+)'").unwrap();
+        let api_token = token_re
+            .captures(&response)
+            .and_then(|c| c.get(1))
+            .map(|m| m.as_str().to_string())
+            .ok_or(Error::TokenParse)?;
+
+        // Parse domain list: <option value="domain.com">
+        let domain_re = Regex::new(r#"<option value="([\w.]+)">"#).unwrap();
+        let domains: Vec<String> = domain_re
+            .captures_iter(&response)
+            .filter_map(|c| c.get(1).map(|m| m.as_str().to_string()))
+            .collect();
+
+        if domains.is_empty() {
+            return Err(Error::DomainParse);
+        }
+
+        Ok(Client {
+            http,
+            api_token,
+            domains,
+            proxy: self.proxy,
+            user_agent: self.user_agent,
+            ajax_url: self.ajax_url,
+        })
     }
 }

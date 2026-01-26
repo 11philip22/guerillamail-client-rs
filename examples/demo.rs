@@ -24,7 +24,16 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     let client = Client::new().await?;
 
     // With proxy (uncomment to use):
-    // let client = Client::with_proxy(Some("http://127.0.0.1:8080")).await?;
+    // let client = Client::builder().proxy("http://127.0.0.1:8080").build().await?;
+
+    // Custom configuration example (uncomment to use):
+    // let client = Client::builder()
+    //     .proxy("http://127.0.0.1:8080")
+    //     .danger_accept_invalid_certs(false)
+    //     .user_agent("guerrillamail-demo/1.0")
+    //     .ajax_url("https://www.guerrillamail.com/ajax.php")
+    //     .build()
+    //     .await?;
 
     println!("   ✅ Connected to GuerrillaMail API");
 

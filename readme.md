@@ -54,6 +54,20 @@ async fn main() -> Result<(), guerrillamail::Error> {
 }
 ```
 
+If you need custom configuration (proxy, TLS, user agent), use the builder:
+
+```rust
+use guerrillamail::Client;
+
+let client = Client::builder()
+    .proxy("http://127.0.0.1:8080")
+    .danger_accept_invalid_certs(false)
+    .user_agent("my-app/1.0")
+    .ajax_url("https://www.guerrillamail.com/ajax.php")
+    .build()
+    .await?;
+```
+
 ## Acknowledgements
 
 This library is a Rust port of [GuerrillaMail-Python](https://github.com/rino-snow/GuerrillaMail-Python).
