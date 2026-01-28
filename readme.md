@@ -3,6 +3,7 @@
 [![Crates.io](https://img.shields.io/crates/v/guerrillamail-client.svg)](https://crates.io/crates/guerrillamail-client)
 [![Documentation](https://docs.rs/guerrillamail-client/badge.svg)](https://docs.rs/guerrillamail-client)
 [![License: MIT](https://img.shields.io/badge/License-MIT-yellow.svg)](https://opensource.org/licenses/MIT)
+[![PRs Welcome](https://img.shields.io/badge/PRs-welcome-brightgreen.svg)](https://github.com/woldp001/guerrillamail-client-rs/pulls)
 
 ![GuerrillaMail](https://img.guerrillamail.com/4/6/f/46f9fd8911b3a915c1fec119e9062d00.png)
 
@@ -22,7 +23,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-guerrillamail = "0.3.1"
+guerrillamail = "0.4.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -72,6 +73,10 @@ let client = Client::builder()
 
 This library is a Rust port of [GuerrillaMail-Python](https://github.com/rino-snow/GuerrillaMail-Python).
 
+## Support
+
+[![Ko-fi](https://ko-fi.com/img/githubbutton_sm.svg)](https://ko-fi.com/11philip22)
+
 ## License
 
-MIT License - see [license](license) for details.
+MIT License; see [license](license) for details.
