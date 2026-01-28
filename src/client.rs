@@ -9,6 +9,9 @@ use reqwest::header::{
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// Async client for GuerrillaMail temporary email service.
+///
+/// Use [`Client::new`] for defaults or [`Client::builder`] for custom settings
+/// like proxies, TLS behavior, and a custom user agent.
 #[derive(Debug)]
 pub struct Client {
     http: reqwest::Client,
@@ -27,11 +30,23 @@ impl Client {
     /// Create a new GuerrillaMail client.
     ///
     /// Connects to GuerrillaMail and retrieves the API token and available domains.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use guerrillamail::Client;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// let client = Client::new().await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn new() -> Result<Self> {
         ClientBuilder::new().build().await
     }
 
     /// Get the proxy URL if one was configured.
+    ///
+    /// Returns `None` when no proxy was set on the builder.
     pub fn proxy(&self) -> Option<&str> {
         self.proxy.as_deref()
     }
@@ -43,6 +58,18 @@ impl Client {
     ///
     /// # Returns
     /// The full email address assigned by GuerrillaMail
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use guerrillamail::Client;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// let client = Client::new().await?;
+    /// let email = client.create_email("myalias").await?;
+    /// println!("{email}");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn create_email(&self, alias: &str) -> Result<String> {
         let params = [("f", "set_email_user")];
         let form = [
@@ -78,6 +105,21 @@ impl Client {
     ///
     /// # Returns
     /// A list of messages in the inbox
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use guerrillamail::Client;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// let client = Client::new().await?;
+    /// let email = client.create_email("myalias").await?;
+    /// let messages = client.get_messages(&email).await?;
+    /// for msg in messages {
+    ///     println!("{}: {}", msg.mail_from, msg.mail_subject);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn get_messages(&self, email: &str) -> Result<Vec<Message>> {
         let response = self.get_api("check_email", email, None).await?;
 
@@ -102,6 +144,22 @@ impl Client {
     ///
     /// # Returns
     /// The full email details including the body
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use guerrillamail::Client;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// let client = Client::new().await?;
+    /// let email = client.create_email("myalias").await?;
+    /// let messages = client.get_messages(&email).await?;
+    /// if let Some(msg) = messages.first() {
+    ///     let details = client.fetch_email(&email, &msg.mail_id).await?;
+    ///     println!("{}", details.mail_body);
+    /// }
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn fetch_email(&self, email: &str, mail_id: &str) -> Result<crate::EmailDetails> {
         let response = self.get_api("fetch_email", email, Some(mail_id)).await?;
         serde_json::from_value(response).map_err(|_| Error::TokenParse)
@@ -114,6 +172,19 @@ impl Client {
     ///
     /// # Returns
     /// `true` if deletion was successful
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use guerrillamail::Client;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// let client = Client::new().await?;
+    /// let email = client.create_email("myalias").await?;
+    /// let ok = client.delete_email(&email).await?;
+    /// println!("{ok}");
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn delete_email(&self, email: &str) -> Result<bool> {
         let alias = Self::extract_alias(email);
         let params = [("f", "forget_me")];
@@ -231,6 +302,8 @@ const USER_AGENT_VALUE: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0";
 
 /// Builder for configuring a GuerrillaMail client.
+///
+/// Start with [`Client::builder`] to override defaults.
 #[derive(Debug, Clone)]
 pub struct ClientBuilder {
     proxy: Option<String>,
@@ -241,6 +314,12 @@ pub struct ClientBuilder {
 
 impl ClientBuilder {
     /// Create a new builder with default settings.
+    ///
+    /// Defaults:
+    /// - No proxy
+    /// - `danger_accept_invalid_certs = true`
+    /// - Default user agent
+    /// - Default GuerrillaMail AJAX endpoint
     pub fn new() -> Self {
         Self {
             proxy: None,
@@ -251,12 +330,16 @@ impl ClientBuilder {
     }
 
     /// Set a proxy URL (e.g., "http://127.0.0.1:8080").
+    ///
+    /// This uses reqwest's proxy support for all requests.
     pub fn proxy(mut self, proxy: impl Into<String>) -> Self {
         self.proxy = Some(proxy.into());
         self
     }
 
     /// Control whether to accept invalid TLS certificates (default: true).
+    ///
+    /// Set this to `false` for stricter TLS validation.
     pub fn danger_accept_invalid_certs(mut self, value: bool) -> Self {
         self.danger_accept_invalid_certs = value;
         self
@@ -269,12 +352,29 @@ impl ClientBuilder {
     }
 
     /// Override the AJAX endpoint URL.
+    ///
+    /// Useful for testing or when GuerrillaMail changes its endpoint.
     pub fn ajax_url(mut self, ajax_url: impl Into<String>) -> Self {
         self.ajax_url = ajax_url.into();
         self
     }
 
     /// Build the client and fetch initial API token + domains.
+    ///
+    /// This performs a network request to GuerrillaMail to bootstrap the session.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use guerrillamail::Client;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// let client = Client::builder()
+    ///     .user_agent("my-app/1.0")
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub async fn build(self) -> Result<Client> {
         let mut builder =
             reqwest::Client::builder().danger_accept_invalid_certs(self.danger_accept_invalid_certs);

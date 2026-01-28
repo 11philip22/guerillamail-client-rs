@@ -31,4 +31,6 @@ pub use error::Error;
 pub use models::{EmailDetails, Message};
 
 /// Result type alias for GuerrillaMail operations.
+///
+/// This is equivalent to `std::result::Result<T, Error>`.
 pub type Result<T> = std::result::Result<T, Error>;

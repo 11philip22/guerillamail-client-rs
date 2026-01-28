@@ -13,7 +13,7 @@ pub struct Message {
     pub mail_subject: String,
     /// Short excerpt of the email body.
     pub mail_excerpt: String,
-    /// Unix timestamp of when the email was received.
+    /// Unix timestamp (as a string) of when the email was received.
     pub mail_timestamp: String,
 }
 
@@ -28,6 +28,6 @@ pub struct EmailDetails {
     pub mail_subject: String,
     /// Full HTML body of the email.
     pub mail_body: String,
-    /// Unix timestamp of when the email was received.
+    /// Unix timestamp (as a string) of when the email was received.
     pub mail_timestamp: String,
 }
