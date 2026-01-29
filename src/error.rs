@@ -42,6 +42,14 @@ pub enum Error {
     #[error("Failed to parse domain list from GuerrillaMail page")]
     DomainParse,
 
+    /// Failed to build or parse a regex used by the client.
+    #[error("Regex error: {0}")]
+    Regex(#[from] regex::Error),
+
+    /// Failed to construct an HTTP header value.
+    #[error("Invalid header value: {0}")]
+    HeaderValue(#[from] reqwest::header::InvalidHeaderValue),
+
     /// Failed to deserialize JSON returned by the GuerrillaMail API.
     ///
     /// This usually indicates an unexpected response schema or a

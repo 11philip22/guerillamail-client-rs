@@ -13,7 +13,7 @@
 use crate::{Error, Message, Result};
 use regex::Regex;
 use reqwest::header::{
-    HeaderMap, HeaderValue, ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, HOST, ORIGIN, REFERER,
+    ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, HOST, HeaderMap, HeaderValue, ORIGIN, REFERER,
     USER_AGENT,
 };
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -33,7 +33,7 @@ use std::time::{SystemTime, UNIX_EPOCH};
 #[derive(Debug)]
 pub struct Client {
     http: reqwest::Client,
-    api_token: String,
+    api_token_header: HeaderValue,
     proxy: Option<String>,
     user_agent: String,
     ajax_url: String,
@@ -183,8 +183,8 @@ impl Client {
 
         let messages = list
             .iter()
-            .map(|v| serde_json::from_value::<Message>(v.clone()))
-            .collect::<std::result::Result<Vec<_>, _>>()?;
+            .map(|v| serde_json::from_value::<Message>(v.clone()).map_err(Into::into))
+            .collect::<Result<Vec<_>>>()?;
 
         Ok(messages)
     }
@@ -361,10 +361,7 @@ impl Client {
             CONTENT_TYPE,
             HeaderValue::from_static("application/x-www-form-urlencoded; charset=UTF-8"),
         );
-        headers.insert(
-            "Authorization",
-            HeaderValue::from_str(&format!("ApiToken {}", self.api_token)).unwrap(),
-        );
+        headers.insert("Authorization", self.api_token_header.clone());
         headers.insert(
             "X-Requested-With",
             HeaderValue::from_static("XMLHttpRequest"),
@@ -406,6 +403,12 @@ pub struct ClientBuilder {
     danger_accept_invalid_certs: bool,
     user_agent: String,
     ajax_url: String,
+}
+
+impl Default for ClientBuilder {
+    fn default() -> Self {
+        Self::new()
+    }
 }
 
 impl ClientBuilder {
@@ -483,8 +486,8 @@ impl ClientBuilder {
     /// # }
     /// ```
     pub async fn build(self) -> Result<Client> {
-        let mut builder =
-            reqwest::Client::builder().danger_accept_invalid_certs(self.danger_accept_invalid_certs);
+        let mut builder = reqwest::Client::builder()
+            .danger_accept_invalid_certs(self.danger_accept_invalid_certs);
 
         if let Some(proxy_url) = &self.proxy {
             builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
@@ -497,16 +500,17 @@ impl ClientBuilder {
         let response = http.get(BASE_URL).send().await?.text().await?;
 
         // Parse API token: api_token : 'xxxxxxxx'
-        let token_re = Regex::new(r"api_token\s*:\s*'(\w+)'").unwrap();
+        let token_re = Regex::new(r"api_token\s*:\s*'(\w+)'")?;
         let api_token = token_re
             .captures(&response)
             .and_then(|c| c.get(1))
             .map(|m| m.as_str().to_string())
             .ok_or(Error::TokenParse)?;
+        let api_token_header = HeaderValue::from_str(&format!("ApiToken {}", api_token))?;
 
         Ok(Client {
             http,
-            api_token,
+            api_token_header,
             proxy: self.proxy,
             user_agent: self.user_agent,
             ajax_url: self.ajax_url,

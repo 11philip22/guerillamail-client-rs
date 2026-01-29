@@ -107,7 +107,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let remaining = (timeout - start.elapsed()).as_secs();
         print!("\r   Checking... {} seconds remaining   ", remaining);
         use std::io::Write;
-        std::io::stdout().flush().ok();
+        std::io::stdout().flush()?;
 
         tokio::time::sleep(poll_interval).await;
     }
