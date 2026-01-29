@@ -79,4 +79,4 @@ This library is a Rust port of [GuerrillaMail-Python](https://github.com/rino-sn
 
 ## License
 
-MIT License; see [license](license) for details.
+This project is licensed under the MIT License; see [license](license) for details.
