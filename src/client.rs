@@ -1,4 +1,14 @@
 //! GuerrillaMail async client implementation.
+//!
+//! This module provides an async [`Client`] and [`ClientBuilder`] for interacting with
+//! the GuerrillaMail temporary email service.
+//!
+//! Typical flow:
+//! 1) Build a client (`Client::new` or `Client::builder().build()`)
+//! 2) Create an address via [`Client::create_email`]
+//! 3) Poll the inbox via [`Client::get_messages`]
+//! 4) Fetch full message content via [`Client::fetch_email`]
+//! 5) Optionally forget the address via [`Client::delete_email`]
 
 use crate::{Error, Message, Result};
 use regex::Regex;
@@ -8,10 +18,18 @@ use reqwest::header::{
 };
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Async client for GuerrillaMail temporary email service.
+/// Async client for the GuerrillaMail temporary email service.
 ///
-/// Use [`Client::new`] for defaults or [`Client::builder`] for custom settings
-/// like proxies, TLS behavior, and a custom user agent.
+/// A `Client` is cheap to clone at the `reqwest` level (internally shared connection pool),
+/// but this type itself is not `Clone` in this implementation. Create it once and reuse it.
+///
+/// Construction requires a bootstrap request to GuerrillaMail in order to extract the
+/// per-session API token from the homepage HTML. See [`Client::new`] and [`Client::builder`].
+///
+/// # Notes
+/// - GuerrillaMail addresses are represented by an *alias* (the part before `@`) plus a domain.
+///   Several API calls only use the alias; this client extracts it automatically.
+/// - All methods are async and require a Tokio runtime (or any runtime compatible with `reqwest`).
 #[derive(Debug)]
 pub struct Client {
     http: reqwest::Client,
@@ -22,20 +40,42 @@ pub struct Client {
 }
 
 impl Client {
-    /// Create a builder for configuring the client.
+    /// Create a [`ClientBuilder`] for configuring a new client.
+    ///
+    /// Use this when you need to set a proxy, change TLS behavior, or override the user agent.
+    ///
+    /// # Examples
+    /// ```no_run
+    /// # use guerrillamail_client::Client;
+    /// # #[tokio::main]
+    /// # async fn main() -> Result<(), guerrillamail_client::Error> {
+    /// let client = Client::builder()
+    ///     .user_agent("my-app/1.0")
+    ///     .build()
+    ///     .await?;
+    /// # Ok(())
+    /// # }
+    /// ```
     pub fn builder() -> ClientBuilder {
         ClientBuilder::new()
     }
 
-    /// Create a new GuerrillaMail client.
+    /// Create a new GuerrillaMail client using default settings.
     ///
-    /// Connects to GuerrillaMail and retrieves the API token and available domains.
+    /// This performs a bootstrap request to GuerrillaMail to retrieve the per-session
+    /// API token used for subsequent AJAX requests.
+    ///
+    /// If you need a proxy or stricter TLS verification, prefer [`Client::builder`].
+    ///
+    /// # Errors
+    /// Returns an error if the bootstrap request fails, or if the API token cannot be
+    /// parsed from the homepage HTML.
     ///
     /// # Examples
     /// ```no_run
-    /// # use guerrillamail::Client;
+    /// # use guerrillamail_client::Client;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// # async fn main() -> Result<(), guerrillamail_client::Error> {
     /// let client = Client::new().await?;
     /// # Ok(())
     /// # }
@@ -44,26 +84,32 @@ impl Client {
         ClientBuilder::new().build().await
     }
 
-    /// Get the proxy URL if one was configured.
+    /// Get the proxy URL configured for this client (if any).
     ///
     /// Returns `None` when no proxy was set on the builder.
     pub fn proxy(&self) -> Option<&str> {
         self.proxy.as_deref()
     }
 
-    /// Create a temporary email address.
+    /// Create a temporary email address for the given alias.
+    ///
+    /// GuerrillaMail addresses are conceptually `alias@<domain>`. This call asks the service
+    /// to assign the requested alias and returns the full email address as a string.
     ///
     /// # Arguments
-    /// * `alias` - The email alias (part before @)
+    /// * `alias` - The desired local-part (before the `@`).
     ///
     /// # Returns
-    /// The full email address assigned by GuerrillaMail
+    /// The full email address assigned by GuerrillaMail (e.g. `myalias@sharklasers.com`).
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or if the response does not include an email address.
     ///
     /// # Examples
     /// ```no_run
-    /// # use guerrillamail::Client;
+    /// # use guerrillamail_client::Client;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// # async fn main() -> Result<(), guerrillamail_client::Error> {
     /// let client = Client::new().await?;
     /// let email = client.create_email("myalias").await?;
     /// println!("{email}");
@@ -95,22 +141,28 @@ impl Client {
             .get("email_addr")
             .and_then(|v| v.as_str())
             .map(|s| s.to_string())
-            .ok_or(Error::TokenParse)
+            .ok_or(Error::ResponseParse("missing or non-string `email_addr`"))
     }
 
-    /// Get messages for an email address.
+    /// Retrieve the current inbox messages for the given email address.
+    ///
+    /// This calls GuerrillaMail's `check_email` endpoint. Only the alias portion of the
+    /// email is used by the underlying API; the client extracts it automatically.
     ///
     /// # Arguments
-    /// * `email` - The full email address
+    /// * `email` - A full email address (e.g. `alias@domain.tld`).
     ///
     /// # Returns
-    /// A list of messages in the inbox
+    /// A list of inbox messages (headers/summary fields).
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or if the server response is not valid JSON.
     ///
     /// # Examples
     /// ```no_run
-    /// # use guerrillamail::Client;
+    /// # use guerrillamail_client::Client;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// # async fn main() -> Result<(), guerrillamail_client::Error> {
     /// let client = Client::new().await?;
     /// let email = client.create_email("myalias").await?;
     /// let messages = client.get_messages(&email).await?;
@@ -136,20 +188,26 @@ impl Client {
         Ok(messages)
     }
 
-    /// Fetch the full content of a specific email.
+    /// Fetch the full content of a specific message.
+    ///
+    /// Use [`Client::get_messages`] to list messages and obtain a `mail_id`, then call this
+    /// method to retrieve the full message body and details.
     ///
     /// # Arguments
-    /// * `email` - The full email address
-    /// * `mail_id` - The message ID to fetch
+    /// * `email` - A full email address (used to derive the alias for the API call).
+    /// * `mail_id` - The message id returned by the inbox listing.
     ///
     /// # Returns
-    /// The full email details including the body
+    /// An [`EmailDetails`](crate::EmailDetails) struct containing full message metadata and body.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails or if the JSON response cannot be deserialized.
     ///
     /// # Examples
     /// ```no_run
-    /// # use guerrillamail::Client;
+    /// # use guerrillamail_client::Client;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// # async fn main() -> Result<(), guerrillamail_client::Error> {
     /// let client = Client::new().await?;
     /// let email = client.create_email("myalias").await?;
     /// let messages = client.get_messages(&email).await?;
@@ -162,22 +220,30 @@ impl Client {
     /// ```
     pub async fn fetch_email(&self, email: &str, mail_id: &str) -> Result<crate::EmailDetails> {
         let response = self.get_api("fetch_email", email, Some(mail_id)).await?;
-        serde_json::from_value(response).map_err(|_| Error::TokenParse)
+        let details: crate::EmailDetails = serde_json::from_value(response)?;
+        Ok(details)
     }
 
-    /// Delete/forget an email address.
+    /// Forget/delete the given email address from the current session.
+    ///
+    /// This calls GuerrillaMail's `forget_me` action. The service uses the alias portion of the
+    /// address; the client extracts it automatically.
     ///
     /// # Arguments
-    /// * `email` - The full email address to delete
+    /// * `email` - The full email address to forget.
     ///
     /// # Returns
-    /// `true` if deletion was successful
+    /// `true` if the HTTP request succeeded (2xx status), otherwise `false`.
+    ///
+    /// # Notes
+    /// This method does not guarantee the address becomes unusable globally—it only requests
+    /// GuerrillaMail to forget it for the current session.
     ///
     /// # Examples
     /// ```no_run
-    /// # use guerrillamail::Client;
+    /// # use guerrillamail_client::Client;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// # async fn main() -> Result<(), guerrillamail_client::Error> {
     /// let client = Client::new().await?;
     /// let email = client.create_email("myalias").await?;
     /// let ok = client.delete_email(&email).await?;
@@ -202,7 +268,20 @@ impl Client {
         Ok(response.status().is_success())
     }
 
-    /// Common GET API request pattern.
+    /// Perform a common GuerrillaMail AJAX API call and return the raw JSON value.
+    ///
+    /// This helper centralizes request construction for endpoints such as `check_email` and
+    /// `fetch_email`. It injects a cache-busting timestamp parameter and ensures the correct
+    /// authorization header is set.
+    ///
+    /// # Arguments
+    /// * `function` - The GuerrillaMail function name (e.g. `"check_email"`).
+    /// * `email` - Full email address (alias will be extracted).
+    /// * `email_id` - Optional message id parameter for endpoints that require it.
+    ///
+    /// # Errors
+    /// Returns an error if the request fails, the server returns a non-success status,
+    /// or the body cannot be parsed as JSON.
     async fn get_api(
         &self,
         function: &str,
@@ -242,12 +321,17 @@ impl Client {
             .map_err(Into::into)
     }
 
-    /// Extract alias from email address.
+    /// Extract the alias (local-part) from a full email address.
+    ///
+    /// If the string does not contain `@`, the full input is returned unchanged.
     fn extract_alias(email: &str) -> &str {
         email.split('@').next().unwrap_or(email)
     }
 
-    /// Generate timestamp for cache-busting.
+    /// Generate a millisecond timestamp suitable for cache-busting query parameters.
+    ///
+    /// # Panics
+    /// Panics if the system clock is before the Unix epoch (extremely unlikely in practice).
     fn timestamp() -> String {
         SystemTime::now()
             .duration_since(UNIX_EPOCH)
@@ -256,7 +340,9 @@ impl Client {
             .to_string()
     }
 
-    /// Build headers for API requests.
+    /// Construct the HTTP headers used for GuerrillaMail AJAX requests.
+    ///
+    /// Includes the GuerrillaMail `ApiToken` authorization header extracted during bootstrap.
     fn headers(&self) -> HeaderMap {
         let mut headers = HeaderMap::new();
         headers.insert(HOST, HeaderValue::from_static("www.guerrillamail.com"));
@@ -301,9 +387,16 @@ const AJAX_URL: &str = "https://www.guerrillamail.com/ajax.php";
 const USER_AGENT_VALUE: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0";
 
-/// Builder for configuring a GuerrillaMail client.
+/// Builder for configuring a GuerrillaMail [`Client`].
 ///
-/// Start with [`Client::builder`] to override defaults.
+/// Start with [`Client::builder`] to override defaults, then call [`ClientBuilder::build`]
+/// to perform the bootstrap request and construct the client.
+///
+/// # Defaults
+/// - No proxy
+/// - `danger_accept_invalid_certs = true` (convenient for interception/testing)
+/// - A browser-like user agent
+/// - The default GuerrillaMail AJAX endpoint
 #[derive(Debug, Clone)]
 pub struct ClientBuilder {
     proxy: Option<String>,
@@ -315,11 +408,7 @@ pub struct ClientBuilder {
 impl ClientBuilder {
     /// Create a new builder with default settings.
     ///
-    /// Defaults:
-    /// - No proxy
-    /// - `danger_accept_invalid_certs = true`
-    /// - Default user agent
-    /// - Default GuerrillaMail AJAX endpoint
+    /// See [`ClientBuilder`] for the list of defaults.
     pub fn new() -> Self {
         Self {
             proxy: None,
@@ -329,45 +418,60 @@ impl ClientBuilder {
         }
     }
 
-    /// Set a proxy URL (e.g., "http://127.0.0.1:8080").
+    /// Set a proxy URL (e.g. `"http://127.0.0.1:8080"`).
     ///
-    /// This uses reqwest's proxy support for all requests.
+    /// The proxy is applied to all requests performed by the underlying `reqwest::Client`.
     pub fn proxy(mut self, proxy: impl Into<String>) -> Self {
         self.proxy = Some(proxy.into());
         self
     }
 
-    /// Control whether to accept invalid TLS certificates (default: true).
+    /// Configure whether to accept invalid TLS certificates (default: `true`).
     ///
-    /// Set this to `false` for stricter TLS validation.
+    /// Set this to `false` for stricter TLS verification.
+    ///
+    /// # Security
+    /// Accepting invalid certificates is unsafe on untrusted networks; it is primarily useful
+    /// for debugging or traffic inspection in controlled environments.
     pub fn danger_accept_invalid_certs(mut self, value: bool) -> Self {
         self.danger_accept_invalid_certs = value;
         self
     }
 
     /// Override the default user agent string.
+    ///
+    /// GuerrillaMail may apply different behavior based on the UA; the default is a
+    /// browser-like value.
     pub fn user_agent(mut self, user_agent: impl Into<String>) -> Self {
         self.user_agent = user_agent.into();
         self
     }
 
-    /// Override the AJAX endpoint URL.
+    /// Override the GuerrillaMail AJAX endpoint URL.
     ///
-    /// Useful for testing or when GuerrillaMail changes its endpoint.
+    /// This is primarily useful for testing or if GuerrillaMail changes its endpoint.
     pub fn ajax_url(mut self, ajax_url: impl Into<String>) -> Self {
         self.ajax_url = ajax_url.into();
         self
     }
 
-    /// Build the client and fetch initial API token + domains.
+    /// Build the [`Client`] by performing the bootstrap request.
     ///
-    /// This performs a network request to GuerrillaMail to bootstrap the session.
+    /// This creates an underlying `reqwest::Client` (with cookie storage enabled), performs
+    /// a request to the GuerrillaMail homepage, and extracts the `api_token` required for
+    /// subsequent AJAX calls.
+    ///
+    /// # Errors
+    /// Returns an error if:
+    /// - the HTTP client cannot be constructed (e.g., invalid proxy URL),
+    /// - the bootstrap request fails,
+    /// - the `api_token` cannot be parsed from the response.
     ///
     /// # Examples
     /// ```no_run
-    /// # use guerrillamail::Client;
+    /// # use guerrillamail_client::Client;
     /// # #[tokio::main]
-    /// # async fn main() -> Result<(), guerrillamail::Error> {
+    /// # async fn main() -> Result<(), guerrillamail_client::Error> {
     /// let client = Client::builder()
     ///     .user_agent("my-app/1.0")
     ///     .build()
@@ -383,10 +487,10 @@ impl ClientBuilder {
             builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
         }
 
-        // Enable cookie store to persist session between requests
+        // Enable cookie store to persist session between requests.
         let http = builder.cookie_store(true).build()?;
 
-        // Fetch the main page to get API token and domains
+        // Fetch the main page to get API token.
         let response = http.get(BASE_URL).send().await?.text().await?;
 
         // Parse API token: api_token : 'xxxxxxxx'

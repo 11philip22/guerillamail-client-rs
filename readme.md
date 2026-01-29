@@ -30,10 +30,10 @@ tokio = { version = "1", features = ["full"] }
 ## Quick Start
 
 ```rust
-use guerrillamail::Client;
+use guerrillamail_client::Client;
 
 #[tokio::main]
-async fn main() -> Result<(), guerrillamail::Error> {
+async fn main() -> Result<(), guerrillamail_client::Error> {
     // Create a new client
     let client = Client::new().await?;
     
@@ -58,7 +58,7 @@ async fn main() -> Result<(), guerrillamail::Error> {
 If you need custom configuration (proxy, TLS, user agent), use the builder:
 
 ```rust
-use guerrillamail::Client;
+use guerrillamail_client::Client;
 
 let client = Client::builder()
     .proxy("http://127.0.0.1:8080")

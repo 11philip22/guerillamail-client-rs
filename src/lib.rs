@@ -4,10 +4,10 @@
 //!
 //! # Example
 //! ```no_run
-//! use guerrillamail::Client;
+//! use guerrillamail_client::Client;
 //!
 //! #[tokio::main]
-//! async fn main() -> Result<(), guerrillamail::Error> {
+//! async fn main() -> Result<(), guerrillamail_client::Error> {
 //!     let client = Client::new().await?;
 //!     let email = client.create_email("myalias").await?;
 //!     println!("Created: {}", email);
