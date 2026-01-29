@@ -137,11 +137,12 @@ impl Client {
             .json()
             .await?;
 
-        response
+        let email_addr = response
             .get("email_addr")
             .and_then(|v| v.as_str())
-            .map(|s| s.to_string())
-            .ok_or(Error::ResponseParse("missing or non-string `email_addr`"))
+            .ok_or(Error::ResponseParse("missing or non-string `email_addr`"))?;
+
+        Ok(email_addr.to_string())
     }
 
     /// Retrieve the current inbox messages for the given email address.
@@ -175,15 +176,15 @@ impl Client {
     pub async fn get_messages(&self, email: &str) -> Result<Vec<Message>> {
         let response = self.get_api("check_email", email, None).await?;
 
-        let messages = response
+        let list = response
             .get("list")
             .and_then(|v| v.as_array())
-            .map(|arr| {
-                arr.iter()
-                    .filter_map(|v| serde_json::from_value::<Message>(v.clone()).ok())
-                    .collect()
-            })
-            .unwrap_or_default();
+            .ok_or(Error::ResponseParse("missing or non-array `list`"))?;
+
+        let messages = list
+            .iter()
+            .map(|v| serde_json::from_value::<Message>(v.clone()))
+            .collect::<std::result::Result<Vec<_>, _>>()?;
 
         Ok(messages)
     }
@@ -309,7 +310,8 @@ impl Client {
         let mut headers = self.headers();
         headers.remove(CONTENT_TYPE);
 
-        self.http
+        let response: serde_json::Value = self
+            .http
             .get(&self.ajax_url)
             .query(&params)
             .headers(headers)
@@ -317,8 +319,9 @@ impl Client {
             .await?
             .error_for_status()?
             .json()
-            .await
-            .map_err(Into::into)
+            .await?;
+
+        Ok(response)
     }
 
     /// Extract the alias (local-part) from a full email address.
