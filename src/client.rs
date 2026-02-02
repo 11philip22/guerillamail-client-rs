@@ -12,9 +12,12 @@
 
 use crate::{Attachment, Error, Message, Result};
 use regex::Regex;
-use reqwest::header::{
-    ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, HOST, HeaderMap, HeaderValue, ORIGIN, REFERER,
-    USER_AGENT,
+use reqwest::{
+    header::{
+        ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, HOST, HeaderMap, HeaderValue, ORIGIN, REFERER,
+        USER_AGENT,
+    },
+    Url,
 };
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
@@ -36,8 +39,10 @@ pub struct Client {
     api_token_header: HeaderValue,
     proxy: Option<String>,
     user_agent: String,
-    ajax_url: String,
-    base_url: String,
+    ajax_url: Url,
+    base_url: Url,
+    ajax_headers: HeaderMap,
+    base_headers: HeaderMap,
 }
 
 impl fmt::Debug for Client {
@@ -141,10 +146,10 @@ impl Client {
 
         let response: serde_json::Value = self
             .http
-            .post(&self.ajax_url)
+            .post(self.ajax_url.as_str())
             .query(&params)
             .form(&form)
-            .headers(self.headers())
+            .headers(self.ajax_headers())
             .send()
             .await?
             .error_for_status()?
@@ -318,7 +323,7 @@ impl Client {
             .http
             .get(&inbox_url)
             .query(&query)
-            .headers(self.headers())
+            .headers(self.base_headers())
             .send()
             .await?
             .error_for_status()?;
@@ -362,10 +367,10 @@ impl Client {
 
         let response = self
             .http
-            .post(&self.ajax_url)
+            .post(self.ajax_url.as_str())
             .query(&params)
             .form(&form)
-            .headers(self.headers())
+            .headers(self.ajax_headers())
             .send()
             .await?
             .error_for_status()?;
@@ -395,12 +400,12 @@ impl Client {
     ) -> Result<serde_json::Value> {
         let params = self.api_params(function, email, email_id);
 
-        let mut headers = self.headers();
+        let mut headers = self.ajax_headers();
         headers.remove(CONTENT_TYPE);
 
         let response: serde_json::Value = self
             .http
-            .get(&self.ajax_url)
+            .get(self.ajax_url.as_str())
             .query(&params)
             .headers(headers)
             .send()
@@ -420,12 +425,12 @@ impl Client {
     ) -> Result<String> {
         let params = self.api_params(function, email, email_id);
 
-        let mut headers = self.headers();
+        let mut headers = self.ajax_headers();
         headers.remove(CONTENT_TYPE);
 
         let response = self
             .http
-            .get(&self.ajax_url)
+            .get(self.ajax_url.as_str())
             .query(&params)
             .headers(headers)
             .send()
@@ -472,7 +477,10 @@ impl Client {
     }
 
     fn inbox_url(&self) -> String {
-        format!("{}/inbox", self.base_url.trim_end_matches('/'))
+        self.base_url
+            .join("inbox")
+            .expect("constructing inbox URL should not fail")
+            .into()
     }
 
     /// Generate a millisecond timestamp suitable for cache-busting query parameters.
@@ -489,43 +497,59 @@ impl Client {
             .to_string()
     }
 
-    /// Construct the HTTP headers used for GuerrillaMail AJAX requests.
-    ///
-    /// Includes the GuerrillaMail `ApiToken` authorization header extracted during bootstrap.
-    fn headers(&self) -> HeaderMap {
-        let mut headers = HeaderMap::new();
-        headers.insert(HOST, HeaderValue::from_static("www.guerrillamail.com"));
-        if let Ok(value) = HeaderValue::from_str(&self.user_agent) {
-            headers.insert(USER_AGENT, value);
-        }
-        headers.insert(
-            ACCEPT,
-            HeaderValue::from_static("application/json, text/javascript, */*; q=0.01"),
-        );
-        headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.5"));
-        headers.insert(
-            CONTENT_TYPE,
-            HeaderValue::from_static("application/x-www-form-urlencoded; charset=UTF-8"),
-        );
-        headers.insert("Authorization", self.api_token_header.clone());
-        headers.insert(
-            "X-Requested-With",
-            HeaderValue::from_static("XMLHttpRequest"),
-        );
-        headers.insert(
-            ORIGIN,
-            HeaderValue::from_static("https://www.guerrillamail.com"),
-        );
-        headers.insert(
-            REFERER,
-            HeaderValue::from_static("https://www.guerrillamail.com/"),
-        );
-        headers.insert("Sec-Fetch-Dest", HeaderValue::from_static("empty"));
-        headers.insert("Sec-Fetch-Mode", HeaderValue::from_static("cors"));
-        headers.insert("Sec-Fetch-Site", HeaderValue::from_static("same-origin"));
-        headers.insert("Priority", HeaderValue::from_static("u=0"));
-        headers
+    fn ajax_headers(&self) -> HeaderMap {
+        self.ajax_headers.clone()
     }
+
+    fn base_headers(&self) -> HeaderMap {
+        self.base_headers.clone()
+    }
+}
+
+fn build_headers(
+    url: &Url,
+    user_agent: &str,
+    api_token_header: &HeaderValue,
+) -> Result<HeaderMap> {
+    let host = url
+        .host_str()
+        .ok_or(Error::ResponseParse("missing host in URL"))?;
+    let host_port = match url.port() {
+        Some(port) => format!("{host}:{port}"),
+        None => host.to_string(),
+    };
+    let origin = format!("{}://{}", url.scheme(), host_port);
+    let referer = format!("{origin}/");
+
+    let mut headers = HeaderMap::new();
+    headers.insert(
+        HOST,
+        HeaderValue::from_str(&host_port).map_err(Error::HeaderValue)?,
+    );
+    if let Ok(value) = HeaderValue::from_str(user_agent) {
+        headers.insert(USER_AGENT, value);
+    }
+    headers.insert(
+        ACCEPT,
+        HeaderValue::from_static("application/json, text/javascript, */*; q=0.01"),
+    );
+    headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.5"));
+    headers.insert(
+        CONTENT_TYPE,
+        HeaderValue::from_static("application/x-www-form-urlencoded; charset=UTF-8"),
+    );
+    headers.insert("Authorization", api_token_header.clone());
+    headers.insert(
+        "X-Requested-With",
+        HeaderValue::from_static("XMLHttpRequest"),
+    );
+    headers.insert(ORIGIN, HeaderValue::from_str(&origin).map_err(Error::HeaderValue)?);
+    headers.insert(REFERER, HeaderValue::from_str(&referer).map_err(Error::HeaderValue)?);
+    headers.insert("Sec-Fetch-Dest", HeaderValue::from_static("empty"));
+    headers.insert("Sec-Fetch-Mode", HeaderValue::from_static("cors"));
+    headers.insert("Sec-Fetch-Site", HeaderValue::from_static("same-origin"));
+    headers.insert("Priority", HeaderValue::from_static("u=0"));
+    Ok(headers)
 }
 
 const BASE_URL: &str = "https://www.guerrillamail.com";
@@ -650,11 +674,17 @@ impl ClientBuilder {
             builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
         }
 
+        // Parse configured URLs early to fail fast on invalid input.
+        let base_url = Url::parse(&self.base_url)
+            .map_err(|_| Error::ResponseParse("invalid base_url"))?;
+        let ajax_url = Url::parse(&self.ajax_url)
+            .map_err(|_| Error::ResponseParse("invalid ajax_url"))?;
+
         // Enable cookie store to persist session between requests.
         let http = builder.cookie_store(true).build()?;
 
         // Fetch the main page to get API token.
-        let response = http.get(&self.base_url).send().await?.text().await?;
+        let response = http.get(base_url.as_str()).send().await?.text().await?;
 
         // Parse API token: api_token : 'xxxxxxxx'
         let token_re = Regex::new(r"api_token\s*:\s*'(\w+)'")?;
@@ -665,13 +695,20 @@ impl ClientBuilder {
             .ok_or(Error::TokenParse)?;
         let api_token_header = HeaderValue::from_str(&format!("ApiToken {}", api_token))?;
 
+        let ajax_headers =
+            build_headers(&ajax_url, &self.user_agent, &api_token_header)?;
+        let base_headers =
+            build_headers(&base_url, &self.user_agent, &api_token_header)?;
+
         Ok(Client {
             http,
             api_token_header,
             proxy: self.proxy,
             user_agent: self.user_agent,
-            ajax_url: self.ajax_url,
-            base_url: self.base_url,
+            ajax_url,
+            base_url,
+            ajax_headers,
+            base_headers,
         })
     }
 }
@@ -684,6 +721,12 @@ impl Client {
             .build()
             .expect("test client build failed");
         let api_token_header = HeaderValue::from_static("ApiToken test");
+        let base_url = Url::parse(&base_url).expect("invalid base_url in test");
+        let ajax_url = Url::parse(&ajax_url).expect("invalid ajax_url in test");
+        let ajax_headers =
+            build_headers(&ajax_url, USER_AGENT_VALUE, &api_token_header).expect("ajax headers");
+        let base_headers =
+            build_headers(&base_url, USER_AGENT_VALUE, &api_token_header).expect("base headers");
         Self {
             http,
             api_token_header,
@@ -691,6 +734,8 @@ impl Client {
             user_agent: USER_AGENT_VALUE.to_string(),
             ajax_url,
             base_url,
+            ajax_headers,
+            base_headers,
         }
     }
 }
