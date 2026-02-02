@@ -235,40 +235,10 @@ impl Client {
     /// ```
     pub async fn fetch_email(&self, email: &str, mail_id: &str) -> Result<crate::EmailDetails> {
         let raw = self.get_api_text("fetch_email", email, Some(mail_id)).await?;
-        #[cfg(feature = "debug_responses")]
-        {
-            eprintln!("fetch_email raw response for EmailDetails (mail_id={})", mail_id);
-            if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(&raw) {
-                if let Some(obj) = value.as_object_mut() {
-                    if obj.contains_key("sid_token") {
-                        obj.insert("sid_token".to_string(), serde_json::Value::String("<redacted>".to_string()));
-                    }
-                }
-                if let Ok(pretty) = serde_json::to_string_pretty(&value) {
-                    eprintln!("{pretty}");
-                } else {
-                    eprintln!("{raw}");
-                }
-            } else {
-                let redacted = Self::redact_sid_token(&raw);
-                eprintln!("{redacted}");
-            }
-        }
 
         match serde_json::from_str::<crate::EmailDetails>(&raw) {
             Ok(details) => Ok(details),
-            Err(err) => {
-                #[cfg(feature = "debug_responses")]
-                {
-                    let redacted = Self::redact_sid_token(&raw);
-                    eprintln!(
-                        "fetch_email deserialization error for EmailDetails (mail_id={}): {}",
-                        mail_id, err
-                    );
-                    eprintln!("{redacted}");
-                }
-                Err(Error::Json(err))
-            }
+            Err(err) => Err(Error::Json(err))
         }
     }
 
@@ -497,14 +467,6 @@ impl Client {
         }
 
         params
-    }
-
-    #[cfg(feature = "debug_responses")]
-    // Redacts sid_token in debug logging to avoid leaking sensitive values.
-    fn redact_sid_token(raw: &str) -> String {
-        let re = Regex::new(r#"("sid_token"\s*:\s*")[^"]*(")"#)
-            .unwrap_or_else(|_| Regex::new(r"$^").expect("regex fallback failed"));
-        re.replace_all(raw, r#"$1<redacted>$2"#).to_string()
     }
 
     fn inbox_url(&self) -> String {
