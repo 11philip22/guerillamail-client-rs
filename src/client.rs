@@ -42,6 +42,7 @@ pub struct Client {
     ajax_url: Url,
     base_url: Url,
     ajax_headers: HeaderMap,
+    ajax_headers_no_ct: HeaderMap,
     base_headers: HeaderMap,
 }
 
@@ -241,10 +242,8 @@ impl Client {
     pub async fn fetch_email(&self, email: &str, mail_id: &str) -> Result<crate::EmailDetails> {
         let raw = self.get_api_text("fetch_email", email, Some(mail_id)).await?;
 
-        match serde_json::from_str::<crate::EmailDetails>(&raw) {
-            Ok(details) => Ok(details),
-            Err(err) => Err(Error::Json(err))
-        }
+        let details = serde_json::from_str::<crate::EmailDetails>(&raw)?;
+        Ok(details)
     }
 
     /// List attachment metadata for a message.
@@ -400,8 +399,7 @@ impl Client {
     ) -> Result<serde_json::Value> {
         let params = self.api_params(function, email, email_id);
 
-        let mut headers = self.ajax_headers();
-        headers.remove(CONTENT_TYPE);
+        let headers = self.ajax_headers_no_ct();
 
         let response: serde_json::Value = self
             .http
@@ -425,8 +423,7 @@ impl Client {
     ) -> Result<String> {
         let params = self.api_params(function, email, email_id);
 
-        let mut headers = self.ajax_headers();
-        headers.remove(CONTENT_TYPE);
+        let headers = self.ajax_headers_no_ct();
 
         let response = self
             .http
@@ -501,6 +498,10 @@ impl Client {
         self.ajax_headers.clone()
     }
 
+    fn ajax_headers_no_ct(&self) -> HeaderMap {
+        self.ajax_headers_no_ct.clone()
+    }
+
     fn base_headers(&self) -> HeaderMap {
         self.base_headers.clone()
     }
@@ -510,6 +511,7 @@ fn build_headers(
     url: &Url,
     user_agent: &str,
     api_token_header: &HeaderValue,
+    include_content_type: bool,
 ) -> Result<HeaderMap> {
     let host = url
         .host_str()
@@ -526,18 +528,19 @@ fn build_headers(
         HOST,
         HeaderValue::from_str(&host_port).map_err(Error::HeaderValue)?,
     );
-    if let Ok(value) = HeaderValue::from_str(user_agent) {
-        headers.insert(USER_AGENT, value);
-    }
+    let user_agent = HeaderValue::from_str(user_agent).map_err(Error::HeaderValue)?;
+    headers.insert(USER_AGENT, user_agent);
     headers.insert(
         ACCEPT,
         HeaderValue::from_static("application/json, text/javascript, */*; q=0.01"),
     );
     headers.insert(ACCEPT_LANGUAGE, HeaderValue::from_static("en-US,en;q=0.5"));
-    headers.insert(
-        CONTENT_TYPE,
-        HeaderValue::from_static("application/x-www-form-urlencoded; charset=UTF-8"),
-    );
+    if include_content_type {
+        headers.insert(
+            CONTENT_TYPE,
+            HeaderValue::from_static("application/x-www-form-urlencoded; charset=UTF-8"),
+        );
+    }
     headers.insert("Authorization", api_token_header.clone());
     headers.insert(
         "X-Requested-With",
@@ -568,6 +571,7 @@ const USER_AGENT_VALUE: &str =
 /// - A browser-like user agent
 /// - The default GuerrillaMail AJAX endpoint
 /// - The default GuerrillaMail base URL
+/// - A 30-second request timeout
 #[derive(Debug, Clone)]
 pub struct ClientBuilder {
     proxy: Option<String>,
@@ -575,6 +579,7 @@ pub struct ClientBuilder {
     user_agent: String,
     ajax_url: String,
     base_url: String,
+    timeout: std::time::Duration,
 }
 
 impl Default for ClientBuilder {
@@ -594,6 +599,8 @@ impl ClientBuilder {
             user_agent: USER_AGENT_VALUE.to_string(),
             ajax_url: AJAX_URL.to_string(),
             base_url: BASE_URL.to_string(),
+            // Keep requests from hanging indefinitely; 30s is a conservative, service-friendly default.
+            timeout: std::time::Duration::from_secs(30),
         }
     }
 
@@ -642,6 +649,14 @@ impl ClientBuilder {
         self
     }
 
+    /// Override the default request timeout.
+    ///
+    /// The timeout applies to the whole request (connect + read). Defaults to 30 seconds.
+    pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
+        self.timeout = timeout;
+        self
+    }
+
     /// Build the [`Client`] by performing the bootstrap request.
     ///
     /// This creates an underlying `reqwest::Client` (with cookie storage enabled), performs
@@ -668,7 +683,8 @@ impl ClientBuilder {
     /// ```
     pub async fn build(self) -> Result<Client> {
         let mut builder = reqwest::Client::builder()
-            .danger_accept_invalid_certs(self.danger_accept_invalid_certs);
+            .danger_accept_invalid_certs(self.danger_accept_invalid_certs)
+            .timeout(self.timeout);
 
         if let Some(proxy_url) = &self.proxy {
             builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
@@ -687,7 +703,7 @@ impl ClientBuilder {
         let response = http.get(base_url.as_str()).send().await?.text().await?;
 
         // Parse API token: api_token : 'xxxxxxxx'
-        let token_re = Regex::new(r"api_token\s*:\s*'(\w+)'")?;
+        let token_re = Regex::new(r"api_token\s*:\s*'([^']+)'")?;
         let api_token = token_re
             .captures(&response)
             .and_then(|c| c.get(1))
@@ -696,9 +712,11 @@ impl ClientBuilder {
         let api_token_header = HeaderValue::from_str(&format!("ApiToken {}", api_token))?;
 
         let ajax_headers =
-            build_headers(&ajax_url, &self.user_agent, &api_token_header)?;
+            build_headers(&ajax_url, &self.user_agent, &api_token_header, true)?;
+        let ajax_headers_no_ct =
+            build_headers(&ajax_url, &self.user_agent, &api_token_header, false)?;
         let base_headers =
-            build_headers(&base_url, &self.user_agent, &api_token_header)?;
+            build_headers(&base_url, &self.user_agent, &api_token_header, true)?;
 
         Ok(Client {
             http,
@@ -708,6 +726,7 @@ impl ClientBuilder {
             ajax_url,
             base_url,
             ajax_headers,
+            ajax_headers_no_ct,
             base_headers,
         })
     }
@@ -724,9 +743,11 @@ impl Client {
         let base_url = Url::parse(&base_url).expect("invalid base_url in test");
         let ajax_url = Url::parse(&ajax_url).expect("invalid ajax_url in test");
         let ajax_headers =
-            build_headers(&ajax_url, USER_AGENT_VALUE, &api_token_header).expect("ajax headers");
+            build_headers(&ajax_url, USER_AGENT_VALUE, &api_token_header, true).expect("ajax headers");
+        let ajax_headers_no_ct =
+            build_headers(&ajax_url, USER_AGENT_VALUE, &api_token_header, false).expect("ajax headers no ct");
         let base_headers =
-            build_headers(&base_url, USER_AGENT_VALUE, &api_token_header).expect("base headers");
+            build_headers(&base_url, USER_AGENT_VALUE, &api_token_header, true).expect("base headers");
         Self {
             http,
             api_token_header,
@@ -735,6 +756,7 @@ impl Client {
             ajax_url,
             base_url,
             ajax_headers,
+            ajax_headers_no_ct,
             base_headers,
         }
     }
@@ -845,5 +867,13 @@ mod tests {
 
         assert!(matches!(err, Error::Request(_)));
         delete_mock.assert();
+    }
+
+    #[test]
+    fn token_regex_accepts_broad_characters() {
+        let token_re = Regex::new(r"api_token\s*:\s*'([^']+)'").unwrap();
+        let sample = "const data = { api_token : 'abc-123.def:ghi' };";
+        let caps = token_re.captures(sample).expect("should match");
+        assert_eq!(caps.get(1).unwrap().as_str(), "abc-123.def:ghi");
     }
 }

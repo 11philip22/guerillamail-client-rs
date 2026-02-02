@@ -106,7 +106,7 @@ async fn main() -> Result<(), guerrillamail_client::Error> {
 
 ## Configuration via builder
 
-For proxies, stricter TLS, or custom user agents, use the builder API:
+For proxies, stricter TLS, custom user agents, or a different request timeout, use the builder API:
 
 ```rust
 use guerrillamail_client::Client;
@@ -115,6 +115,7 @@ let client = Client::builder()
     .proxy("http://127.0.0.1:8080")
     .danger_accept_invalid_certs(false)
     .user_agent("my-app/1.0")
+    .timeout(std::time::Duration::from_secs(30)) // default is 30s; customize as needed
     .build()
     .await?;
 ```
