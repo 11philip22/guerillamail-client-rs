@@ -336,7 +336,8 @@ impl Client {
     /// * `email` - The full email address to forget.
     ///
     /// # Returns
-    /// `true` if the HTTP request succeeded (2xx status), otherwise `false`.
+    /// `Ok(true)` if the HTTP request succeeded (2xx status).
+    /// Returns an error for non-success responses or request failures.
     ///
     /// # Notes
     /// This method does not guarantee the address becomes unusable globally—it only requests
@@ -366,7 +367,8 @@ impl Client {
             .form(&form)
             .headers(self.headers())
             .send()
-            .await?;
+            .await?
+            .error_for_status()?;
 
         Ok(response.status().is_success())
     }
@@ -696,7 +698,7 @@ impl Client {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use httpmock::Method::GET;
+    use httpmock::Method::{GET, POST};
     use httpmock::MockServer;
     use serde_json::json;
 
@@ -752,5 +754,51 @@ mod tests {
         assert_eq!(bytes, b"hello");
         fetch_email_mock.assert();
         attachment_mock.assert();
+    }
+
+    #[tokio::test]
+    async fn delete_email_returns_true_on_success() {
+        let server = MockServer::start();
+        let base_url = server.base_url();
+
+        let delete_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/ajax.php")
+                .query_param("f", "forget_me");
+            then.status(204);
+        });
+
+        let client = Client::new_for_tests(
+            base_url.clone(),
+            format!("{base_url}/ajax.php"),
+        );
+
+        let ok = client.delete_email("alias@example.com").await.unwrap();
+
+        assert!(ok);
+        delete_mock.assert();
+    }
+
+    #[tokio::test]
+    async fn delete_email_errors_on_non_success_status() {
+        let server = MockServer::start();
+        let base_url = server.base_url();
+
+        let delete_mock = server.mock(|when, then| {
+            when.method(POST)
+                .path("/ajax.php")
+                .query_param("f", "forget_me");
+            then.status(500);
+        });
+
+        let client = Client::new_for_tests(
+            base_url.clone(),
+            format!("{base_url}/ajax.php"),
+        );
+
+        let err = client.delete_email("alias@example.com").await.unwrap_err();
+
+        assert!(matches!(err, Error::Request(_)));
+        delete_mock.assert();
     }
 }
