@@ -8,6 +8,7 @@ use std::fmt;
 #[derive(Debug, Clone, Deserialize)]
 pub struct Message {
     /// Unique message ID.
+    #[serde(deserialize_with = "de_string_or_number")]
     pub mail_id: String,
     /// Sender email address.
     pub mail_from: String,
@@ -16,43 +17,60 @@ pub struct Message {
     /// Short excerpt of the email body.
     pub mail_excerpt: String,
     /// Unix timestamp (as a string) of when the email was received.
+    #[serde(deserialize_with = "de_string_or_number")]
     pub mail_timestamp: String,
 }
 
 /// Attachment metadata returned by GuerrillaMail.
 #[derive(Debug, Clone, Deserialize, PartialEq, Eq)]
 pub struct Attachment {
-    /// Original filename.
-    #[serde(default, rename = "f")]
+    /// Original filename (GuerrillaMail always includes this).
+    #[serde(rename = "f")]
     pub filename: String,
     /// Content type or hint (meaning may vary).
     #[serde(default, rename = "t")]
     pub content_type_or_hint: Option<String>,
     /// Attachment part ID used for download.
-    #[serde(default, rename = "p")]
+    #[serde(rename = "p", deserialize_with = "de_string_or_number")]
     pub part_id: String,
 }
 
 #[derive(Deserialize)]
 #[serde(untagged)]
-enum StrOrNumU32 {
+enum StrOrNum {
     Str(String),
     Num(u64),
+}
+
+fn de_string_or_number<'de, D>(deserializer: D) -> Result<String, D::Error>
+where
+    D: Deserializer<'de>,
+{
+    match StrOrNum::deserialize(deserializer)? {
+        StrOrNum::Str(raw) => Ok(raw),
+        StrOrNum::Num(num) => Ok(num.to_string()),
+    }
 }
 
 fn de_u32_str_or_num_opt<'de, D>(deserializer: D) -> Result<Option<u32>, D::Error>
 where
     D: Deserializer<'de>,
 {
-    let value = Option::<StrOrNumU32>::deserialize(deserializer)?;
+    let value = Option::<StrOrNum>::deserialize(deserializer)?;
     match value {
         None => Ok(None),
-        Some(StrOrNumU32::Str(raw)) => raw
-            .trim()
-            .parse::<u32>()
-            .map(Some)
-            .map_err(serde::de::Error::custom),
-        Some(StrOrNumU32::Num(num)) => u32::try_from(num)
+        Some(StrOrNum::Str(raw)) => {
+            let trimmed = raw.trim();
+            if trimmed.is_empty() {
+                Ok(None)
+            } else {
+                trimmed
+                    .parse::<u32>()
+                    .map(Some)
+                    .map_err(serde::de::Error::custom)
+            }
+        }
+        Some(StrOrNum::Num(num)) => u32::try_from(num)
             .map(Some)
             .map_err(serde::de::Error::custom),
     }
@@ -62,6 +80,7 @@ where
 #[derive(Clone, Deserialize)]
 pub struct EmailDetails {
     /// Unique message ID.
+    #[serde(deserialize_with = "de_string_or_number")]
     pub mail_id: String,
     /// Sender email address.
     pub mail_from: String,
@@ -70,6 +89,7 @@ pub struct EmailDetails {
     /// Full HTML body of the email.
     pub mail_body: String,
     /// Unix timestamp (as a string) of when the email was received.
+    #[serde(deserialize_with = "de_string_or_number")]
     pub mail_timestamp: String,
     /// Attachment metadata entries (if any).
     #[serde(default, rename = "att_info")]
@@ -122,14 +142,14 @@ mod tests {
     #[test]
     fn email_details_deserialize_with_attachments() {
         let value = json!({
-            "mail_id": "123",
+            "mail_id": 123,
             "mail_from": "sender@example.com",
             "mail_subject": "Hello",
             "mail_body": "<p>Body</p>",
-            "mail_timestamp": "1700000000",
-            "att": 1,
+            "mail_timestamp": 1700000000,
+            "att": "1",
             "att_info": [
-                { "f": "file.txt", "t": "text/plain", "p": "99" }
+                { "f": "file.txt", "t": "text/plain", "p": 99 }
             ],
             "sid_token": "sid123"
         });
@@ -174,5 +194,35 @@ mod tests {
 
         let details: EmailDetails = serde_json::from_value(value).unwrap();
         assert!(details.attachment_count.is_none());
+    }
+
+    #[test]
+    fn email_details_deserialize_attachment_count_empty_string() {
+        let value = json!({
+            "mail_id": "123",
+            "mail_from": "sender@example.com",
+            "mail_subject": "Hello",
+            "mail_body": "<p>Body</p>",
+            "mail_timestamp": "1700000000",
+            "att": ""
+        });
+
+        let details: EmailDetails = serde_json::from_value(value).unwrap();
+        assert!(details.attachment_count.is_none());
+    }
+
+    #[test]
+    fn message_deserialize_numeric_fields() {
+        let value = json!({
+            "mail_id": 456,
+            "mail_from": "sender@example.com",
+            "mail_subject": "Hello",
+            "mail_excerpt": "Hi",
+            "mail_timestamp": 1700000001
+        });
+
+        let message: Message = serde_json::from_value(value).unwrap();
+        assert_eq!(message.mail_id, "456");
+        assert_eq!(message.mail_timestamp, "1700000001");
     }
 }

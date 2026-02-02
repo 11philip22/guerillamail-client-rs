@@ -12,11 +12,12 @@
 
 use crate::{Attachment, Error, Message, Result};
 use regex::Regex;
+use reqwest::StatusCode;
 use reqwest::header::{
     ACCEPT, ACCEPT_LANGUAGE, CONTENT_TYPE, HOST, HeaderMap, HeaderValue, ORIGIN, REFERER,
     USER_AGENT,
 };
-use reqwest::StatusCode;
+use std::borrow::Cow;
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
@@ -132,16 +133,16 @@ impl Client {
     /// # }
     /// ```
     pub async fn create_email(&self, alias: &str) -> Result<String> {
-        let params = vec![("f", "set_email_user".to_string())];
+        let params = vec![("f", Cow::Borrowed("set_email_user"))];
         let form = vec![
-            ("email_user", alias.to_string()),
-            ("lang", "en".to_string()),
-            ("site", "guerrillamail.com".to_string()),
-            ("in", " Set cancel".to_string()),
+            ("email_user", Cow::Owned(alias.to_string())),
+            ("lang", Cow::Borrowed("en")),
+            ("site", Cow::Borrowed("guerrillamail.com")),
+            ("in", Cow::Borrowed(" Set cancel")),
         ];
 
         let response = self
-            .get_api(ApiMethod::Post, &self.ajax_url, params, Some(form))
+            .request_json(ApiMethod::Post, &self.ajax_url, &params, Some(&form))
             .await?;
 
         let email_addr = response
@@ -183,7 +184,7 @@ impl Client {
     pub async fn get_messages(&self, email: &str) -> Result<Vec<Message>> {
         let params = self.api_params("check_email", email, None);
         let response = self
-            .get_api(ApiMethod::Get, &self.ajax_url, params, None)
+            .request_json(ApiMethod::Get, &self.ajax_url, &params, None)
             .await?;
 
         let list = response
@@ -231,22 +232,14 @@ impl Client {
     /// ```
     pub async fn fetch_email(&self, email: &str, mail_id: &str) -> Result<crate::EmailDetails> {
         let params = self.api_params("fetch_email", email, Some(mail_id));
-        let response = self
-            .get_api(ApiMethod::Get, &self.ajax_url, params, None)
-            .await?;
-        let details: crate::EmailDetails = serde_json::from_value(response)?;
-        Ok(details)
+        self.request(ApiMethod::Get, &self.ajax_url, &params, None).await
     }
 
     /// List attachment metadata for a message.
     ///
     /// This is a convenience wrapper around [`Client::fetch_email`] that returns
     /// the attachment list (if any).
-    pub async fn list_attachments(
-        &self,
-        email: &str,
-        mail_id: &str,
-    ) -> Result<Vec<Attachment>> {
+    pub async fn list_attachments(&self, email: &str, mail_id: &str) -> Result<Vec<Attachment>> {
         let details = self.fetch_email(email, mail_id).await?;
         Ok(details.attachments)
     }
@@ -291,37 +284,32 @@ impl Client {
             return Err(Error::ResponseParse("attachment missing part_id"));
         }
         if mail_id.trim().is_empty() {
-            return Err(Error::ResponseParse("missing mail_id for attachment download"));
+            return Err(Error::ResponseParse(
+                "missing mail_id for attachment download",
+            ));
         }
 
         let details = self.fetch_email(email, mail_id).await?;
         let inbox_url = self.inbox_url();
 
         let mut query = vec![
-            ("get_att", "".to_string()),
-            ("lang", "en".to_string()),
-            ("email_id", mail_id.to_string()),
-            ("part_id", attachment.part_id.clone()),
+            ("get_att", Cow::Borrowed("")),
+            ("lang", Cow::Borrowed("en")),
+            ("email_id", Cow::Owned(mail_id.to_string())),
+            ("part_id", Cow::Owned(attachment.part_id.clone())),
         ];
 
         if let Some(token) = details.sid_token.as_deref() {
             if !token.is_empty() {
-                query.push(("sid_token", token.to_string()));
+                query.push(("sid_token", Cow::Owned(token.to_string())));
             }
         }
 
-        let response = self
-            .get_api_text(
-                ApiMethod::Get,
-                &inbox_url,
-                query,
-                None,
-                true,
-                true,
-            )
+        let bytes = self
+            .request_bytes(ApiMethod::Get, &inbox_url, &query, None)
             .await?;
 
-        Ok(response.body)
+        Ok(bytes)
     }
 
     /// Forget/delete the given email address from the current session.
@@ -353,143 +341,105 @@ impl Client {
     /// ```
     pub async fn delete_email(&self, email: &str) -> Result<bool> {
         let alias = Self::extract_alias(email);
-        let params = vec![("f", "forget_me".to_string())];
+        let params = vec![("f", Cow::Borrowed("forget_me"))];
         let form = vec![
-            ("site", "guerrillamail.com".to_string()),
-            ("in", alias.to_string()),
+            ("site", Cow::Borrowed("guerrillamail.com")),
+            ("in", Cow::Borrowed(alias)),
         ];
 
-        let response = self
-            .get_api_text(
-                ApiMethod::Post,
-                &self.ajax_url,
-                params,
-                Some(form),
-                false,
-                false,
-            )
+        let status = self
+            .request_status(ApiMethod::Post, &self.ajax_url, &params, Some(&form))
             .await?;
 
-        Ok(response.status.is_success())
+        Ok(status.is_success())
     }
 
-    /// Perform a common GuerrillaMail AJAX API call and return the raw JSON value.
-    ///
-    /// This helper centralizes request construction for endpoints such as `check_email` and
-    /// `fetch_email`. It injects a cache-busting timestamp parameter and ensures the correct
-    /// authorization header is set.
-    ///
-    /// # Arguments
-    /// * `function` - The GuerrillaMail function name (e.g. `"check_email"`).
-    /// * `email` - Full email address (alias will be extracted).
-    /// * `email_id` - Optional message id parameter for endpoints that require it.
-    ///
-    /// # Errors
-    /// Returns an error if the request fails, the server returns a non-success status,
-    /// or the body cannot be parsed as JSON.
-    async fn get_api(
+    async fn request_json(
         &self,
         method: ApiMethod,
         url: &str,
-        params: Vec<(&str, String)>,
-        form: Option<Vec<(&str, String)>>,
+        params: &[Param<'_>],
+        form: Option<&[Param<'_>]>,
     ) -> Result<serde_json::Value> {
-        #[cfg(feature = "debug_responses")]
-        let method_name = method;
-        let mut headers = self.headers();
-        headers.remove(CONTENT_TYPE);
-
-        #[cfg(feature = "debug_responses")]
-        self.log_request(method_name, url, &params);
-
-        #[cfg(feature = "debug_responses")]
-        {
-            let response = self
-                .build_request(method_name, url, &params, form)
-                .headers(headers)
-                .send()
-                .await?;
-
-            let status = response.status();
-            let status_err = response.error_for_status_ref().err();
-            let body = response.text().await?;
-            self.log_response_json(Some(status), &body);
-            if let Some(err) = status_err {
-                return Err(err.into());
-            }
-
-            let parsed: serde_json::Value = serde_json::from_str(&body)?;
-            return Ok(parsed);
-        }
-
-        #[cfg(not(feature = "debug_responses"))]
-        {
-            let response: serde_json::Value = self
-                .build_request(method, url, &params, form)
-                .headers(headers)
-                .send()
-                .await?
-                .error_for_status()?
-                .json()
-                .await?;
-
-            Ok(response)
-        }
+        self.request(method, url, params, form).await
     }
 
-    async fn get_api_text(
+    async fn request_bytes(
         &self,
         method: ApiMethod,
         url: &str,
-        params: Vec<(&str, String)>,
-        form: Option<Vec<(&str, String)>>,
-        expect_success: bool,
-        capture_body: bool,
-    ) -> Result<ApiTextResponse> {
+        params: &[Param<'_>],
+        form: Option<&[Param<'_>]>,
+    ) -> Result<Vec<u8>> {
+        let (_status, body) = self.execute_request(method, url, params, form, true).await?;
+        Ok(body)
+    }
+
+    async fn request_status(
+        &self,
+        method: ApiMethod,
+        url: &str,
+        params: &[Param<'_>],
+        form: Option<&[Param<'_>]>,
+    ) -> Result<StatusCode> {
+        let (status, _body) = self.execute_request(method, url, params, form, true).await?;
+        Ok(status)
+    }
+
+    async fn request<T>(
+        &self,
+        method: ApiMethod,
+        url: &str,
+        params: &[Param<'_>],
+        form: Option<&[Param<'_>]>,
+    ) -> Result<T>
+    where
+        T: serde::de::DeserializeOwned,
+    {
+        let (_status, body) = self.execute_request(method, url, params, form, true).await?;
+        let parsed = serde_json::from_slice::<T>(&body)?;
+        Ok(parsed)
+    }
+
+    async fn execute_request(
+        &self,
+        method: ApiMethod,
+        url: &str,
+        params: &[Param<'_>],
+        form: Option<&[Param<'_>]>,
+        log_body: bool,
+    ) -> Result<(StatusCode, Vec<u8>)> {
+        #[cfg(not(feature = "debug_responses"))]
+        let _ = log_body;
+
         let mut headers = self.headers();
-        headers.remove(CONTENT_TYPE);
+        if matches!(method, ApiMethod::Get) {
+            headers.remove(CONTENT_TYPE);
+        }
 
         #[cfg(feature = "debug_responses")]
-        let _ = capture_body;
-
-        #[cfg(feature = "debug_responses")]
-        self.log_request(method, url, &params);
+        self.log_request(method, url, params);
 
         let response = self
-            .build_request(method, url, &params, form)
+            .build_request(method, url, params, form)
             .headers(headers)
             .send()
             .await?;
 
         let status = response.status();
-        let status_err = if expect_success && !status.is_success() {
-            response.error_for_status_ref().err()
-        } else {
-            None
-        };
+        let status_err = response.error_for_status_ref().err();
+        let body = response.bytes().await?;
 
         #[cfg(feature = "debug_responses")]
-        let body = {
-            let body = response.bytes().await?;
-            let body_text = String::from_utf8_lossy(&body);
-            self.log_response_text(Some(status), &body_text);
-            body.to_vec()
-        };
-
-        #[cfg(not(feature = "debug_responses"))]
-        let body = if capture_body {
-            response.bytes().await?.to_vec()
-        } else {
-            Vec::new()
-        };
-
-        if expect_success {
-            if let Some(err) = status_err {
-                return Err(err.into());
-            }
+        if log_body {
+            self.log_response(status, &body);
         }
 
-        Ok(ApiTextResponse { status, body })
+        if let Some(err) = status_err {
+            return Err(err.into());
+        }
+
+        Ok((status, body.to_vec()))
     }
 
     /// Extract the alias (local-part) from a full email address.
@@ -499,28 +449,23 @@ impl Client {
         email.split('@').next().unwrap_or(email)
     }
 
-    fn api_params(
-        &self,
-        function: &str,
-        email: &str,
-        email_id: Option<&str>,
-    ) -> Vec<(&str, String)> {
+    fn api_params(&self, function: &str, email: &str, email_id: Option<&str>) -> Vec<Param<'_>> {
         let alias = Self::extract_alias(email);
         let timestamp = Self::timestamp();
 
         let mut params = vec![
-            ("f", function.to_string()),
-            ("site", "guerrillamail.com".to_string()),
-            ("in", alias.to_string()),
-            ("_", timestamp),
+            ("f", Cow::Borrowed(function)),
+            ("site", Cow::Borrowed("guerrillamail.com")),
+            ("in", Cow::Owned(alias.to_string())),
+            ("_", Cow::Owned(timestamp)),
         ];
 
         if let Some(id) = email_id {
-            params.insert(1, ("email_id", id.to_string()));
+            params.insert(1, ("email_id", Cow::Owned(id.to_string())));
         }
 
         if function == "check_email" {
-            params.insert(1, ("seq", "1".to_string()));
+            params.insert(1, ("seq", Cow::Borrowed("1")));
         }
 
         params
@@ -530,23 +475,23 @@ impl Client {
         &self,
         method: ApiMethod,
         url: &str,
-        params: &Vec<(&str, String)>,
-        form: Option<Vec<(&str, String)>>,
+        params: &[Param<'_>],
+        form: Option<&[Param<'_>]>,
     ) -> reqwest::RequestBuilder {
         match method {
             ApiMethod::Get => self.http.get(url).query(params),
             ApiMethod::Post => {
-                let form_params = form.unwrap_or_default();
-                self.http
-                    .post(url)
-                    .query(params)
-                    .form(&form_params)
+                let mut req = self.http.post(url).query(params);
+                if let Some(form_params) = form {
+                    req = req.form(form_params);
+                }
+                req
             }
         }
     }
 
     #[cfg(feature = "debug_responses")]
-    fn log_request(&self, method: ApiMethod, url: &str, params: &Vec<(&str, String)>) {
+    fn log_request(&self, method: ApiMethod, url: &str, params: &[Param<'_>]) {
         eprintln!("GuerrillaMail API request: {:?} {}", method, url);
         if params.is_empty() {
             eprintln!("Query: <none>");
@@ -554,7 +499,11 @@ impl Client {
             let mut parts = Vec::with_capacity(params.len());
             for (key, value) in params {
                 let is_token = key.to_lowercase().contains("token");
-                let safe_value = if is_token { "<redacted>" } else { value };
+                let safe_value = if is_token {
+                    "<redacted>"
+                } else {
+                    value.as_ref()
+                };
                 parts.push(format!("{key}={safe_value}"));
             }
             eprintln!("Query: {}", parts.join("&"));
@@ -562,13 +511,10 @@ impl Client {
     }
 
     #[cfg(feature = "debug_responses")]
-    fn log_response_json(&self, status: Option<StatusCode>, raw: &str) {
-        let status = status
-            .map(|code| code.as_str().to_string())
-            .unwrap_or_else(|| "<unknown>".to_string());
-        eprintln!("GuerrillaMail API response (status={}):", status);
+    fn log_response(&self, status: StatusCode, body: &[u8]) {
+        eprintln!("GuerrillaMail API response (status={}):", status.as_str());
 
-        if let Ok(mut value) = serde_json::from_str::<serde_json::Value>(raw) {
+        if let Ok(mut value) = serde_json::from_slice::<serde_json::Value>(body) {
             self.redact_tokens_in_value(&mut value);
             if let Ok(pretty) = serde_json::to_string_pretty(&value) {
                 eprintln!("{pretty}");
@@ -576,16 +522,8 @@ impl Client {
             }
         }
 
-        eprintln!("{}", self.redact_tokens_in_text(raw));
-    }
-
-    #[cfg(feature = "debug_responses")]
-    fn log_response_text(&self, status: Option<StatusCode>, raw: &str) {
-        let status = status
-            .map(|code| code.as_str().to_string())
-            .unwrap_or_else(|| "<unknown>".to_string());
-        eprintln!("GuerrillaMail API response (status={}):", status);
-        eprintln!("{}", self.redact_tokens_in_text(raw));
+        let body_text = String::from_utf8_lossy(body);
+        eprintln!("{}", self.redact_tokens_in_text(&body_text));
     }
 
     #[cfg(feature = "debug_responses")]
@@ -725,15 +663,12 @@ pub struct ClientBuilder {
     base_url: String,
 }
 
+type Param<'a> = (&'a str, Cow<'a, str>);
+
 #[derive(Copy, Clone, Debug)]
 enum ApiMethod {
     Get,
     Post,
-}
-
-struct ApiTextResponse {
-    status: StatusCode,
-    body: Vec<u8>,
 }
 
 impl Default for ClientBuilder {
@@ -896,13 +831,13 @@ mod tests {
                 .query_param("f", "fetch_email")
                 .query_param("email_id", "123");
             then.status(200).json_body(json!({
-                "mail_id": "123",
+                "mail_id": 123,
                 "mail_from": "sender@example.com",
                 "mail_subject": "Subject",
                 "mail_body": "<p>Body</p>",
-                "mail_timestamp": "1700000000",
-                "att": 1,
-                "att_info": [{ "f": "file.txt", "t": "text/plain", "p": "99" }],
+                "mail_timestamp": 1700000000,
+                "att": "1",
+                "att_info": [{ "f": "file.txt", "t": "text/plain", "p": 99 }],
                 "sid_token": "sid123"
             }));
         });
@@ -918,10 +853,7 @@ mod tests {
             then.status(200).body("hello");
         });
 
-        let client = Client::new_for_tests(
-            base_url.clone(),
-            format!("{base_url}/ajax.php"),
-        );
+        let client = Client::new_for_tests(base_url.clone(), format!("{base_url}/ajax.php"));
 
         let attachment = Attachment {
             filename: "file.txt".to_string(),
