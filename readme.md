@@ -41,7 +41,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-guerrillamail-client = "0.5.0"
+guerrillamail-client = "0.6.0"
 tokio = { version = "1", features = ["full"] }
 ```
 

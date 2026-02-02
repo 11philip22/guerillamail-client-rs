@@ -1,10 +1,10 @@
-//! Message model for GuerrillaMail.
+//! Wire models returned by GuerrillaMail API calls used by [`Client`](crate::Client).
 
 use serde::Deserialize;
 use serde::Deserializer;
 use std::fmt;
 
-/// An email message from GuerrillaMail.
+/// An email message header returned by GuerrillaMail.
 #[derive(Debug, Clone, Deserialize)]
 pub struct Message {
     /// Unique message ID.
@@ -15,7 +15,7 @@ pub struct Message {
     pub mail_subject: String,
     /// Short excerpt of the email body.
     pub mail_excerpt: String,
-    /// Unix timestamp (as a string) of when the email was received.
+    /// Unix timestamp in seconds (string) of when the email was received.
     pub mail_timestamp: String,
 }
 
@@ -25,7 +25,7 @@ pub struct Attachment {
     /// Original filename.
     #[serde(default, rename = "f")]
     pub filename: String,
-    /// Content type or hint (meaning may vary).
+    /// MIME type or server-provided hint (may be a fallback, not always a strict MIME type).
     #[serde(default, rename = "t")]
     pub content_type_or_hint: Option<String>,
     /// Attachment part ID used for download.
@@ -69,9 +69,9 @@ pub struct EmailDetails {
     pub mail_subject: String,
     /// Full HTML body of the email.
     pub mail_body: String,
-    /// Unix timestamp (as a string) of when the email was received.
+    /// Unix timestamp in seconds (string) of when the email was received.
     pub mail_timestamp: String,
-    /// Attachment metadata entries (if any).
+    /// Attachment metadata entries (if any); see [`Attachment`].
     #[serde(default, rename = "att_info")]
     pub attachments: Vec<Attachment>,
     /// Attachment count (if provided by API).

@@ -22,20 +22,45 @@ use reqwest::{
 use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
-/// Async client for the GuerrillaMail temporary email service.
+/// High-level async handle to a single GuerrillaMail session.
 ///
-/// A `Client` is cheap to clone at the `reqwest` level (internally shared connection pool),
-/// but this type itself is not `Clone` in this implementation. Create it once and reuse it.
+/// Conceptually, a [`Client`] owns the session state needed to talk to the public GuerrillaMail
+/// AJAX API: a cookie jar plus the `ApiToken …` header parsed from an initial bootstrap request.
+/// Every outbound request reuses prebuilt header maps that always include that token, a
+/// browser-like user agent, and the correct host/origin metadata.
 ///
-/// Construction requires a bootstrap request to GuerrillaMail in order to extract the
-/// per-session API token from the homepage HTML. See [`Client::new`] and [`Client::builder`].
+/// Invariants/internal behavior:
+/// - The API token is fetched once during construction and stored as a header; it is never
+///   refreshed automatically. Rebuild the client if the token expires.
+/// - Addresses are treated as `alias@domain`; when the API only cares about the alias,
+///   the client extracts it for you.
+/// - The underlying `reqwest::Client` has cookies enabled so successive calls share the same
+///   GuerrillaMail session.
 ///
-/// # Notes
-/// - GuerrillaMail addresses are represented by an *alias* (the part before `@`) plus a domain.
-///   Several API calls only use the alias; this client extracts it automatically.
-/// - All methods are async and require a Tokio runtime (or any runtime compatible with `reqwest`).
+/// Typical lifecycle: create a client (`Client::new` or `Client::builder().build()`), allocate an
+/// address, poll messages, fetch message details/attachments (via [`Message`] and
+/// [`crate::EmailDetails`]), then optionally forget the address.
+///
+/// Concurrency: [`Client`] is `Clone` and cheap to duplicate; clones share the HTTP connection
+/// pool, cookies, and token header, making it safe to pass into multiple async tasks.
+///
+/// # Example
+/// ```rust,no_run
+/// # use guerrillamail_client::Client;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), guerrillamail_client::Error> {
+/// let client = Client::new().await?;
+/// let email = client.create_email("demo").await?;
+/// let messages = client.get_messages(&email).await?;
+/// println!("Inbox size: {}", messages.len());
+/// client.delete_email(&email).await?;
+/// # Ok(())
+/// # }
+/// ```
+#[derive(Clone)]
 pub struct Client {
     http: reqwest::Client,
+    #[allow(dead_code)]
     api_token_header: HeaderValue,
     proxy: Option<String>,
     user_agent: String,
@@ -80,16 +105,17 @@ impl Client {
         ClientBuilder::new()
     }
 
-    /// Create a new GuerrillaMail client using default settings.
+    /// Build a default GuerrillaMail client.
     ///
-    /// This performs a bootstrap request to GuerrillaMail to retrieve the per-session
-    /// API token used for subsequent AJAX requests.
-    ///
-    /// If you need a proxy or stricter TLS verification, prefer [`Client::builder`].
+    /// Performs a single bootstrap GET to the GuerrillaMail homepage, extracts the `ApiToken …`
+    /// header, and constructs a session-aware client using default headers and timeouts. The
+    /// token is not refreshed automatically; rebuild the client if it expires. Use
+    /// [`Client::builder`] when you need proxy/TLS overrides.
     ///
     /// # Errors
-    /// Returns an error if the bootstrap request fails, or if the API token cannot be
-    /// parsed from the homepage HTML.
+    /// - Returns `Error::Request` on bootstrap network failures or any non-2xx response (via `error_for_status`).
+    /// - Returns `Error::TokenParse` when the API token cannot be extracted from the homepage HTML.
+    /// - Returns `Error::HeaderValue` if the parsed token cannot be encoded into a header.
     ///
     /// # Examples
     /// ```no_run
@@ -111,19 +137,25 @@ impl Client {
         self.proxy.as_deref()
     }
 
-    /// Create a temporary email address for the given alias.
+    /// Request a new temporary address for the given alias.
     ///
-    /// GuerrillaMail addresses are conceptually `alias@<domain>`. This call asks the service
-    /// to assign the requested alias and returns the full email address as a string.
+    /// Sends a POST to the GuerrillaMail AJAX endpoint, asking the service to reserve the supplied
+    /// alias and return the full `alias@domain` address. Builds required headers and includes the
+    /// session token automatically.
     ///
     /// # Arguments
-    /// * `alias` - The desired local-part (before the `@`).
+    /// - `alias`: Desired local-part before `@`.
     ///
     /// # Returns
-    /// The full email address assigned by GuerrillaMail (e.g. `myalias@sharklasers.com`).
+    /// The full email address assigned by GuerrillaMail (e.g., `myalias@sharklasers.com`).
     ///
     /// # Errors
-    /// Returns an error if the request fails or if the response does not include an email address.
+    /// - Returns `Error::Request` for network failures or non-2xx responses.
+    /// - Returns `Error::ResponseParse` if the JSON body lacks a string `email_addr` field.
+    /// Network failures are typically transient; parse errors usually indicate an API schema change.
+    ///
+    /// # Network
+    /// Issues one POST request to `ajax.php`.
     ///
     /// # Examples
     /// ```no_run
@@ -165,19 +197,26 @@ impl Client {
         Ok(email_addr.to_string())
     }
 
-    /// Retrieve the current inbox messages for the given email address.
+    /// Fetch the current inbox listing for an address.
     ///
-    /// This calls GuerrillaMail's `check_email` endpoint. Only the alias portion of the
-    /// email is used by the underlying API; the client extracts it automatically.
+    /// Calls the `check_email` AJAX function using only the alias portion of the provided address.
+    /// Includes cache-busting timestamp and required headers; parses the `list` array into
+    /// [`Message`] structs.
     ///
     /// # Arguments
-    /// * `email` - A full email address (e.g. `alias@domain.tld`).
+    /// - `email`: Full address (alias is extracted automatically).
     ///
     /// # Returns
-    /// A list of inbox messages (headers/summary fields).
+    /// Vector of message headers/summaries currently in the inbox.
     ///
     /// # Errors
-    /// Returns an error if the request fails or if the server response is not valid JSON.
+    /// - Returns `Error::Request` for network failures or non-2xx responses.
+    /// - Returns `Error::ResponseParse` when the JSON body is missing a `list` array.
+    /// - Returns `Error::Json` if individual messages fail to deserialize.
+    /// Network issues are transient; parse/deserialize errors generally indicate a schema change.
+    ///
+    /// # Network
+    /// Issues one GET request to `ajax.php` with query parameters.
     ///
     /// # Examples
     /// ```no_run
@@ -209,20 +248,25 @@ impl Client {
         Ok(messages)
     }
 
-    /// Fetch the full content of a specific message.
+    /// Fetch full contents for a message.
     ///
-    /// Use [`Client::get_messages`] to list messages and obtain a `mail_id`, then call this
-    /// method to retrieve the full message body and details.
+    /// Calls the `fetch_email` AJAX function using the alias derived from the address and the
+    /// provided `mail_id`, then deserializes the full message metadata and body.
     ///
     /// # Arguments
-    /// * `email` - A full email address (used to derive the alias for the API call).
-    /// * `mail_id` - The message id returned by the inbox listing.
+    /// - `email`: Full address associated with the message.
+    /// - `mail_id`: Identifier obtained from [`get_messages`](Client::get_messages).
     ///
     /// # Returns
-    /// An [`EmailDetails`](crate::EmailDetails) struct containing full message metadata and body.
+    /// [`crate::EmailDetails`] containing body, metadata, attachments, and optional `sid_token`.
     ///
     /// # Errors
-    /// Returns an error if the request fails or if the JSON response cannot be deserialized.
+    /// - Returns `Error::Request` for network failures or non-2xx responses.
+    /// - Returns `Error::Json` if the response body cannot be deserialized into `EmailDetails`.
+    /// Network issues are transient; deserialization errors suggest a changed API response.
+    ///
+    /// # Network
+    /// Issues one GET request to `ajax.php`.
     ///
     /// # Examples
     /// ```no_run
@@ -248,8 +292,12 @@ impl Client {
 
     /// List attachment metadata for a message.
     ///
-    /// This is a convenience wrapper around [`Client::fetch_email`] that returns
-    /// the attachment list (if any).
+    /// Convenience wrapper over [`fetch_email`](Client::fetch_email) that extracts the attachment
+    /// list from the returned details.
+    ///
+    /// # Errors
+    /// - Propagates any `Error::Request` or parsing errors from [`fetch_email`](Self::fetch_email).
+    /// Transient network issues bubble up unchanged; parse errors imply the upstream response shape shifted.
     pub async fn list_attachments(
         &self,
         email: &str,
@@ -261,15 +309,25 @@ impl Client {
 
     /// Download an attachment for a message.
     ///
-    /// The GuerrillaMail API may return a `sid_token` as part of `fetch_email`. When present,
-    /// it is included in the download request. If no token is provided, the request relies
-    /// on the existing session cookies.
+    /// Performs a GET to the inbox download endpoint, including any `sid_token` previously
+    /// returned by `fetch_email`. Requires a non-empty `part_id` on the attachment and the
+    /// originating `mail_id`.
+    ///
+    /// # Arguments
+    /// - `email`: Full address used to derive the alias for token-related calls.
+    /// - `mail_id`: Message id whose attachment is being fetched.
+    /// - `attachment`: Attachment metadata containing the part id to retrieve.
+    ///
+    /// # Returns
+    /// Raw bytes of the attachment body.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - the attachment does not include a part id,
-    /// - the request fails,
-    /// - the server returns a non-success status.
+    /// - Returns `Error::ResponseParse` if `part_id` or `mail_id` are empty.
+    /// - Returns `Error::Request` for network failures or non-2xx download responses (via `error_for_status`).
+    /// Empty identifiers are permanent until corrected; network and status errors are transient.
+    ///
+    /// # Network
+    /// Issues one GET request to the inbox download endpoint (typically `/inbox`).
     ///
     /// # Examples
     /// ```no_run
@@ -331,21 +389,23 @@ impl Client {
         Ok(bytes.to_vec())
     }
 
-    /// Forget/delete the given email address from the current session.
+    /// Ask GuerrillaMail to forget an address for this session.
     ///
-    /// This calls GuerrillaMail's `forget_me` action. The service uses the alias portion of the
-    /// address; the client extracts it automatically.
+    /// Calls the `forget_me` AJAX function using the alias extracted from the provided address.
+    /// Only affects the current session; it does not guarantee global deletion of the address.
     ///
     /// # Arguments
-    /// * `email` - The full email address to forget.
+    /// - `email`: Full address to remove from the session.
     ///
     /// # Returns
-    /// `Ok(true)` if the HTTP request succeeded (2xx status).
-    /// Returns an error for non-success responses or request failures.
+    /// `true` when the HTTP response status is 2xx.
     ///
-    /// # Notes
-    /// This method does not guarantee the address becomes unusable globally—it only requests
-    /// GuerrillaMail to forget it for the current session.
+    /// # Errors
+    /// - Returns `Error::Request` for network failures or non-2xx responses from the `forget_me` call.
+    /// Network/non-2xx failures are transient; repeated failures may indicate the service endpoint changed.
+    ///
+    /// # Network
+    /// Issues one POST request to `ajax.php`.
     ///
     /// # Examples
     /// ```no_run
@@ -560,18 +620,37 @@ const AJAX_URL: &str = "https://www.guerrillamail.com/ajax.php";
 const USER_AGENT_VALUE: &str =
     "Mozilla/5.0 (Windows NT 10.0; Win64; x64; rv:131.0) Gecko/20100101 Firefox/131.0";
 
-/// Builder for configuring a GuerrillaMail [`Client`].
+/// Configures and bootstraps a GuerrillaMail [`Client`].
 ///
-/// Start with [`Client::builder`] to override defaults, then call [`ClientBuilder::build`]
-/// to perform the bootstrap request and construct the client.
+/// Conceptually, [`ClientBuilder`] holds request-layer options (proxy, TLS leniency, user agent,
+/// endpoints, timeout). Calling [`build`](ClientBuilder::build) creates a `reqwest::Client` with
+/// cookie storage enabled, fetches the GuerrillaMail homepage once, and captures the `ApiToken …`
+/// header needed for all later AJAX calls.
 ///
-/// # Defaults
-/// - No proxy
-/// - `danger_accept_invalid_certs = true` (convenient for interception/testing)
-/// - A browser-like user agent
-/// - The default GuerrillaMail AJAX endpoint
-/// - The default GuerrillaMail base URL
-/// - A 30-second request timeout
+/// Invariants/internal behavior:
+/// - The bootstrap fetch happens exactly once during `build`; the resulting token is baked into the
+///   constructed [`Client`].
+/// - Defaults favor easy testing: no proxy, `danger_accept_invalid_certs = true`, browser-like
+///   user agent, 30s timeout, and the public GuerrillaMail endpoints.
+/// - `Clone` is cheap and copies configuration only; it does not perform additional network I/O.
+///
+/// Typical lifecycle: start with [`Client::builder`], adjust options, call `build`, then discard
+/// the builder. Reuse the built [`Client`] (or its cheap clones) across tasks.
+///
+/// # Example
+/// ```rust,no_run
+/// # use guerrillamail_client::Client;
+/// # #[tokio::main]
+/// # async fn main() -> Result<(), guerrillamail_client::Error> {
+/// let client = Client::builder()
+///     .proxy("http://127.0.0.1:8080")
+///     .danger_accept_invalid_certs(false)
+///     .user_agent("my-app/2.0")
+///     .build()
+///     .await?;
+/// # Ok(())
+/// # }
+/// ```
 #[derive(Debug, Clone)]
 pub struct ClientBuilder {
     proxy: Option<String>,
@@ -651,23 +730,27 @@ impl ClientBuilder {
 
     /// Override the default request timeout.
     ///
-    /// The timeout applies to the whole request (connect + read). Defaults to 30 seconds.
+    /// The timeout applies to the whole request (connect + read), matching
+    /// [`reqwest::ClientBuilder::timeout`]. Defaults to 30 seconds.
     pub fn timeout(mut self, timeout: std::time::Duration) -> Self {
         self.timeout = timeout;
         self
     }
 
-    /// Build the [`Client`] by performing the bootstrap request.
+    /// Build the [`Client`] by performing the GuerrillaMail bootstrap request.
     ///
-    /// This creates an underlying `reqwest::Client` (with cookie storage enabled), performs
-    /// a request to the GuerrillaMail homepage, and extracts the `api_token` required for
-    /// subsequent AJAX calls.
+    /// Constructs a `reqwest::Client` with cookie storage, applies the configured proxy/TLS/user
+    /// agent/timeouts, sends one GET to the GuerrillaMail homepage, and extracts the `ApiToken …`
+    /// header required for later AJAX calls.
     ///
     /// # Errors
-    /// Returns an error if:
-    /// - the HTTP client cannot be constructed (e.g., invalid proxy URL),
-    /// - the bootstrap request fails,
-    /// - the `api_token` cannot be parsed from the response.
+    /// - Returns `Error::Request` for HTTP client build issues, bootstrap network failures, or non-2xx responses.
+    /// - Returns `Error::TokenParse` when the API token cannot be found in the bootstrap HTML.
+    /// - Returns `Error::HeaderValue` if the token cannot be encoded into the authorization header.
+    /// Network-related failures are transient; token/header errors likely indicate a page layout change.
+    ///
+    /// # Network
+    /// Issues one GET request to the configured `base_url`.
     ///
     /// # Examples
     /// ```no_run
@@ -867,6 +950,22 @@ mod tests {
 
         assert!(matches!(err, Error::Request(_)));
         delete_mock.assert();
+    }
+
+    #[test]
+    fn client_is_clone() {
+        let base_url = "https://example.com";
+        let client = Client::new_for_tests(
+            base_url.to_string(),
+            format!("{base_url}/ajax.php"),
+        );
+
+        let cloned = client.clone();
+
+        assert_eq!(client.proxy, cloned.proxy);
+        assert_eq!(client.user_agent, cloned.user_agent);
+        assert_eq!(client.ajax_url, cloned.ajax_url);
+        assert_eq!(client.base_url, cloned.base_url);
     }
 
     #[test]

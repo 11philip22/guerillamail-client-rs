@@ -6,6 +6,7 @@ description = "Async Rust client for GuerrillaMail temporary email service"
 license = "MIT"
 repository = "https://github.com/11philip22/guerrillamail-client-rs"
 documentation = "https://docs.rs/guerrillamail-client/latest/guerrillamail_client/"
+homepage = "https://www.guerrillamail.com/"
 
 keywords = [
     "email",
