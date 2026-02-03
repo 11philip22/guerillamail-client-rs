@@ -12,13 +12,13 @@ use guerrillamail_client::Client;
 
 #[tokio::main]
 async fn main() -> Result<(), Box<dyn std::error::Error>> {
-    println!("📧 GuerrillaMail Rust Client - Full Demo");
+    println!("GuerrillaMail Rust Client - Full Demo");
     println!("{}", "=".repeat(50));
 
     // =========================================
     // 1. Create client (optionally with proxy)
     // =========================================
-    println!("\n🔌 Creating client...");
+    println!("\nCreating client...");
 
     // Without proxy:
     let client = Client::new().await?;
@@ -35,20 +35,20 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     //     .build()
     //     .await?;
 
-    println!("   ✅ Connected to GuerrillaMail API");
+    println!("   Connected to GuerrillaMail API");
 
     // =========================================
     // 2. Create temporary email address
     // =========================================
-    println!("\n📬 Creating temporary email...");
+    println!("\nCreating temporary email...");
     let alias = format!("demo{}", rand::random::<u16>());
     let email = client.create_email(&alias).await?;
-    println!("   ✅ Created: {}", email);
+    println!("   Created: {}", email);
 
     // =========================================
     // 3. Poll for messages (get_messages)
     // =========================================
-    println!("\n⏳ Waiting for messages...");
+    println!("\nWaiting for messages...");
     println!("   Send an email to: {}", email);
     println!("   (Polling for up to 2 minutes)");
 
@@ -61,7 +61,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         let messages = client.get_messages(&email).await?;
 
         if !messages.is_empty() {
-            println!("\n\n📥 Received {} message(s)!", messages.len());
+            println!("\n\nReceived {} message(s)!", messages.len());
 
             for msg in &messages {
                 println!("\n{}", "-".repeat(50));
@@ -77,7 +77,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                 // =========================================
                 // 4. Fetch full email content (fetch_email)
                 // =========================================
-                println!("\n📄 Fetching full email body...");
+                println!("\nFetching full email body...");
                 match client.fetch_email(&email, &msg.mail_id).await {
                     Ok(details) => {
                         println!("   Body length: {} characters", details.mail_body.len());
@@ -95,7 +95,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                         // 4b. Download attachments (if any)
                         // =========================================
                         if !details.attachments.is_empty() {
-                            println!("\n📎 Found {} attachment(s)", details.attachments.len());
+                            println!("\nFound {} attachment(s)", details.attachments.len());
                             for attachment in &details.attachments {
                                 println!("   - {}", attachment.filename);
                                 match client
@@ -103,17 +103,17 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
                                     .await
                                 {
                                     Ok(bytes) => {
-                                        println!("     ✅ Downloaded {} bytes", bytes.len());
+                                        println!("     Downloaded {} bytes", bytes.len());
                                     }
                                     Err(e) => {
-                                        eprintln!("     ❌ Download failed: {}", e);
+                                        eprintln!("     Download failed: {}", e);
                                     }
                                 }
                             }
                         }
                     }
                     Err(e) => {
-                        eprintln!("   ❌ Failed to fetch: {}", e);
+                        eprintln!("   Failed to fetch: {}", e);
                     }
                 }
             }
@@ -121,7 +121,7 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
         }
 
         if start.elapsed() >= timeout {
-            println!("\n\n⚠️  Timeout: No messages received");
+            println!("\n\nTimeout: No messages received");
             break;
         }
 
@@ -136,15 +136,15 @@ async fn main() -> Result<(), Box<dyn std::error::Error>> {
     // =========================================
     // 5. Delete/forget email address
     // =========================================
-    println!("\n🗑️  Cleaning up email address...");
+    println!("\nCleaning up email address...");
     match client.delete_email(&email).await {
-        Ok(true) => println!("   ✅ Email address deleted"),
-        Ok(false) => println!("   ⚠️  Deletion may have failed"),
-        Err(e) => eprintln!("   ❌ Error: {}", e),
+        Ok(true) => println!("   Email address deleted"),
+        Ok(false) => println!("   Deletion may have failed"),
+        Err(e) => eprintln!("   Error: {}", e),
     }
 
     println!("\n{}", "=".repeat(50));
-    println!("✨ Demo complete!");
+    println!("Demo complete!");
 
     Ok(())
 }

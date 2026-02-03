@@ -7,7 +7,7 @@
 
 ![GuerrillaMail](https://img.guerrillamail.com/4/6/f/46f9fd8911b3a915c1fec119e9062d00.png)
 
-An **async Rust client** for the [GuerrillaMail](https://www.guerrillamail.com) temporary email service.
+An **async Rust API client** for the [GuerrillaMail](https://www.guerrillamail.com) temporary email service, built for testing and automation.
 
 This crate lets you programmatically create disposable email addresses, poll inboxes, and fetch message contents using an idiomatic async Rust API built on `tokio` and `reqwest`.
 
@@ -41,7 +41,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-guerrillamail-client = "0.6.0"
+guerrillamail-client = "0.7.0"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -160,4 +160,4 @@ If this crate saves you time or helps your work, support is appreciated:
 
 ## License
 
-This project is licensed under the MIT License; see [license](license) for details.
+This project is licensed under the MIT License; see the [license](license) file for details.
