@@ -20,20 +20,18 @@ This crate lets you programmatically create disposable email addresses, poll inb
 - Email-based testing (signups, verification emails, password resets)
 - Automation and scraping workflows
 - CI / integration tests that need a disposable inbox
-- Security research and tooling
-
-**Not recommended** for long-lived accounts or reliability-critical workflows.
+- Account generators and security tooling
 
 ## Features
 
-- 🚀 **Async/await first** — built on `tokio` and `reqwest`
-- 📧 **Create temporary email addresses**
-- 📬 **Poll inbox messages**
-- 📄 **Fetch full email contents**
-- 🗑️ **Forget/delete addresses**
-- 🌐 **Proxy support** (e.g. Burp, mitmproxy)
-- 🛠️ **Configurable TLS + User-Agent**
-- 📚 **Well-typed errors with proper chaining**
+- **Async/await first** — built on `tokio` and `reqwest`
+- **Create temporary email addresses**
+- **Poll inbox messages**
+- **Fetch full email contents**
+- **Forget/delete addresses**
+- **Proxy support** (e.g. Burp, mitmproxy)
+- **Configurable TLS + User-Agent**
+- **Well-typed errors with proper chaining**
 
 ## Installation
 
@@ -41,7 +39,7 @@ Add to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-guerrillamail-client = "0.7.0"
+guerrillamail-client = "0.7.1"
 tokio = { version = "1", features = ["full"] }
 ```
 
@@ -120,37 +118,24 @@ let client = Client::builder()
     .await?;
 ```
 
-## Error handling
+## Documentation
 
-All public APIs return a crate-level `Error` enum.
+For detailed API documentation, visit [docs.rs/guerrillamail-client](https://docs.rs/guerrillamail-client).
 
-- Transport / HTTP issues → `Error::Request`
-- Invalid or unexpected JSON → `Error::Json`
-- Response shape changes (missing fields, schema drift) → `Error::ResponseParse`
-- Bootstrap token failures → `Error::TokenParse`
+## Contributing
 
-Underlying errors are **preserved as sources**, so tools like `anyhow` or `eyre`
-can display full error chains.
+Contributions are welcome! Please feel free to submit a Pull Request.
 
-## Limitations & caveats
-
-- GuerrillaMail inboxes are **not permanent**
-- Messages may disappear at any time
-- Address reuse is not guaranteed
-- Rate limits and blocking are controlled by GuerrillaMail, not this crate
-- API behavior may change without warning
+1. Fork the repository
+2. Create your feature branch (`git checkout -b feature/amazing-feature`)
+3. Commit your changes (`git commit -m 'Add some amazing feature'`)
+4. Push to the branch (`git push origin feature/amazing-feature`)
+5. Open a Pull Request
 
 ## Acknowledgements
 
 This project was inspired by and partially based on  
 [GuerrillaMail-Python](https://github.com/rino-snow/GuerrillaMail-Python).
-
-## Contributing
-
-PRs are welcome!  
-Please run `cargo fmt` and `cargo clippy` before submitting.
-
-If you’re changing behavior (e.g. stricter parsing), document it in the PR.
 
 ## Support
 
