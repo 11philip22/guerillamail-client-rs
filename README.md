@@ -89,8 +89,8 @@ async fn main() -> Result<(), guerrillamail_client::Error> {
 
 ## Attachments
 
-Use `list_attachments` when you only need attachment metadata, or pass an
-attachment from `EmailDetails::attachments` directly to `fetch_attachment`.
+Fetch the email details, then pass entries from `EmailDetails::attachments`
+directly to `fetch_attachment`.
 
 ```rust
 use guerrillamail_client::Client;
@@ -102,9 +102,9 @@ async fn main() -> Result<(), guerrillamail_client::Error> {
     let messages = client.get_messages(&email).await?;
 
     if let Some(message) = messages.first() {
-        let attachments = client.list_attachments(&email, &message.mail_id).await?;
+        let details = client.fetch_email(&email, &message.mail_id).await?;
 
-        for attachment in attachments {
+        for attachment in details.attachments {
             let bytes = client
                 .fetch_attachment(&email, &message.mail_id, &attachment)
                 .await?;

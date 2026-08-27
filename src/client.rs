@@ -255,20 +255,6 @@ impl Client {
         self.get_api("fetch_email", email, Some(mail_id)).await
     }
 
-    /// List attachment metadata for a message.
-    ///
-    /// Convenience wrapper over [`fetch_email`](Client::fetch_email) that extracts the attachment
-    /// list from the returned details.
-    ///
-    /// # Errors
-    /// - Propagates any `Error::Request` or parsing errors from [`fetch_email`](Self::fetch_email).
-    ///
-    /// Transient network issues bubble up unchanged; parse errors imply the upstream response shape shifted.
-    pub async fn list_attachments(&self, email: &str, mail_id: &str) -> Result<Vec<Attachment>> {
-        let details = self.fetch_email(email, mail_id).await?;
-        Ok(details.attachments)
-    }
-
     /// Download an attachment for a message.
     ///
     /// Performs a GET to the inbox download endpoint, including any `sid_token` previously
@@ -301,8 +287,8 @@ impl Client {
     /// let email = client.create_email("myalias").await?;
     /// let messages = client.get_messages(&email).await?;
     /// if let Some(msg) = messages.first() {
-    ///     let attachments = client.list_attachments(&email, &msg.mail_id).await?;
-    ///     if let Some(attachment) = attachments.first() {
+    ///     let details = client.fetch_email(&email, &msg.mail_id).await?;
+    ///     if let Some(attachment) = details.attachments.first() {
     ///         let bytes = client.fetch_attachment(&email, &msg.mail_id, attachment).await?;
     ///         println!("Downloaded {} bytes", bytes.len());
     ///     }
