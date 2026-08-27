@@ -61,7 +61,6 @@ pub struct Client {
     http: reqwest::Client,
     #[allow(dead_code)]
     api_token_header: HeaderValue,
-    proxy: Option<String>,
     user_agent: String,
     ajax_url: Url,
     base_url: Url,
@@ -75,7 +74,6 @@ impl fmt::Debug for Client {
         f.debug_struct("Client")
             .field("http", &"<reqwest::Client>")
             .field("api_token_header", &"<redacted>")
-            .field("proxy", &self.proxy)
             .field("user_agent", &self.user_agent)
             .field("ajax_url", &self.ajax_url)
             .field("base_url", &self.base_url)
@@ -127,13 +125,6 @@ impl Client {
     /// ```
     pub async fn new() -> Result<Self> {
         ClientBuilder::new().build().await
-    }
-
-    /// Get the proxy URL configured for this client (if any).
-    ///
-    /// Returns `None` when no proxy was set on the builder.
-    pub fn proxy(&self) -> Option<&str> {
-        self.proxy.as_deref()
     }
 
     /// Request a new temporary address for the given alias.
@@ -832,7 +823,6 @@ impl ClientBuilder {
         Ok(Client {
             http,
             api_token_header,
-            proxy: self.proxy,
             user_agent: self.user_agent,
             ajax_url,
             base_url,
