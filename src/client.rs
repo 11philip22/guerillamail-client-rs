@@ -18,7 +18,6 @@ use reqwest::{
         USER_AGENT,
     },
 };
-use std::fmt;
 use std::time::{SystemTime, UNIX_EPOCH};
 
 /// High-level async handle to a single GuerrillaMail session.
@@ -56,29 +55,14 @@ use std::time::{SystemTime, UNIX_EPOCH};
 /// # Ok(())
 /// # }
 /// ```
-#[derive(Clone)]
+#[derive(Clone, Debug)]
 pub struct Client {
     http: reqwest::Client,
-    #[allow(dead_code)]
-    api_token_header: HeaderValue,
-    user_agent: String,
     ajax_url: Url,
     base_url: Url,
     ajax_headers: HeaderMap,
     ajax_headers_no_ct: HeaderMap,
     base_headers: HeaderMap,
-}
-
-impl fmt::Debug for Client {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        f.debug_struct("Client")
-            .field("http", &"<reqwest::Client>")
-            .field("api_token_header", &"<redacted>")
-            .field("user_agent", &self.user_agent)
-            .field("ajax_url", &self.ajax_url)
-            .field("base_url", &self.base_url)
-            .finish()
-    }
 }
 
 impl Client {
@@ -822,8 +806,6 @@ impl ClientBuilder {
 
         Ok(Client {
             http,
-            api_token_header,
-            user_agent: self.user_agent,
             ajax_url,
             base_url,
             ajax_headers,
