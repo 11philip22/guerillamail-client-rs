@@ -15,9 +15,8 @@ use thiserror::Error;
 pub enum Error {
     /// An HTTP request failed.
     ///
-    /// This includes network connectivity issues, TLS errors,
-    /// timeouts, and non-success HTTP status codes returned
-    /// by the GuerrillaMail service.
+    /// This includes network connectivity issues, TLS errors, timeouts,
+    /// non-success HTTP statuses, and response decoding failures.
     #[error("HTTP request failed: {0}")]
     Request(#[from] reqwest::Error),
 
@@ -38,13 +37,6 @@ pub enum Error {
     /// Failed to construct an HTTP header value.
     #[error("Invalid header value: {0}")]
     HeaderValue(#[from] reqwest::header::InvalidHeaderValue),
-
-    /// Failed to deserialize JSON returned by the GuerrillaMail API.
-    ///
-    /// This usually indicates an unexpected response schema or a
-    /// partially returned / malformed payload.
-    #[error("JSON parsing error: {0}")]
-    Json(#[from] serde_json::Error),
 
     /// A configured endpoint URL is invalid or missing a host.
     #[error("Invalid URL: {0}")]

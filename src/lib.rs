@@ -11,7 +11,7 @@
 //! Not a general-purpose mail client, SMTP sender, or durable mailbox. It only proxies the GuerrillaMail service and inherits its availability, spam filtering, and retention limits.
 //!
 //! ## Errors
-//! All network calls surface transport and non-2xx statuses as [`Error::Request`]; shape or content issues become [`Error::ResponseParse`] or [`Error::Json`]. The crate-wide [`Result`] alias wraps these errors.
+//! Network, HTTP status, and response decoding failures surface as [`Error::Request`]; explicit content validation becomes [`Error::ResponseParse`]. The crate-wide [`Result`] alias wraps these errors.
 //!
 //! ## Example
 //! ```no_run

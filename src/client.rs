@@ -10,7 +10,7 @@
 //! 4) Fetch full message content via [`Client::fetch_email`]
 //! 5) Optionally forget the address via [`Client::delete_email`]
 
-use crate::{Attachment, Error, Message, Result};
+use crate::{Attachment, EmailDetails, Error, Message, Result};
 use reqwest::{
     Url,
     header::{
@@ -18,7 +18,18 @@ use reqwest::{
         USER_AGENT,
     },
 };
+use serde::{Deserialize, de::DeserializeOwned};
 use std::time::{SystemTime, UNIX_EPOCH};
+
+#[derive(Deserialize)]
+struct SetEmailResponse {
+    email_addr: String,
+}
+
+#[derive(Deserialize)]
+struct InboxResponse {
+    list: Vec<Message>,
+}
 
 /// High-level async handle to a single GuerrillaMail session.
 ///
@@ -124,8 +135,7 @@ impl Client {
     /// The full email address assigned by GuerrillaMail (e.g., `myalias@sharklasers.com`).
     ///
     /// # Errors
-    /// - Returns `Error::Request` for network failures or non-2xx responses.
-    /// - Returns `Error::ResponseParse` if the JSON body lacks a string `email_addr` field.
+    /// - Returns `Error::Request` for network failures, non-2xx responses, or invalid response JSON.
     ///
     /// Network failures are typically transient; parse errors usually indicate an API schema change.
     ///
@@ -152,7 +162,7 @@ impl Client {
             ("in", " Set cancel"),
         ];
 
-        let response: serde_json::Value = self
+        let response: SetEmailResponse = self
             .http
             .post(self.ajax_url.as_str())
             .query(&params)
@@ -164,12 +174,7 @@ impl Client {
             .json()
             .await?;
 
-        let email_addr = response
-            .get("email_addr")
-            .and_then(|v| v.as_str())
-            .ok_or(Error::ResponseParse("missing or non-string `email_addr`"))?;
-
-        Ok(email_addr.to_string())
+        Ok(response.email_addr)
     }
 
     /// Fetch the current inbox listing for an address.
@@ -185,9 +190,7 @@ impl Client {
     /// Vector of message headers/summaries currently in the inbox.
     ///
     /// # Errors
-    /// - Returns `Error::Request` for network failures or non-2xx responses.
-    /// - Returns `Error::ResponseParse` when the JSON body is missing a `list` array.
-    /// - Returns `Error::Json` if individual messages fail to deserialize.
+    /// - Returns `Error::Request` for network failures, non-2xx responses, or invalid response JSON.
     ///
     /// Network issues are transient; parse/deserialize errors generally indicate a schema change.
     ///
@@ -209,19 +212,8 @@ impl Client {
     /// # }
     /// ```
     pub async fn get_messages(&self, email: &str) -> Result<Vec<Message>> {
-        let response = self.get_api("check_email", email, None).await?;
-
-        let list = response
-            .get("list")
-            .and_then(|v| v.as_array())
-            .ok_or(Error::ResponseParse("missing or non-array `list`"))?;
-
-        let messages = list
-            .iter()
-            .map(|v| serde_json::from_value::<Message>(v.clone()).map_err(Into::into))
-            .collect::<Result<Vec<_>>>()?;
-
-        Ok(messages)
+        let response: InboxResponse = self.get_api("check_email", email, None).await?;
+        Ok(response.list)
     }
 
     /// Fetch full contents for a message.
@@ -237,8 +229,7 @@ impl Client {
     /// [`crate::EmailDetails`] containing body, metadata, attachments, and optional `sid_token`.
     ///
     /// # Errors
-    /// - Returns `Error::Request` for network failures or non-2xx responses.
-    /// - Returns `Error::Json` if the response body cannot be deserialized into `EmailDetails`.
+    /// - Returns `Error::Request` for network failures, non-2xx responses, or invalid response JSON.
     ///
     /// Network issues are transient; deserialization errors suggest a changed API response.
     ///
@@ -260,13 +251,8 @@ impl Client {
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn fetch_email(&self, email: &str, mail_id: &str) -> Result<crate::EmailDetails> {
-        let raw = self
-            .get_api_text("fetch_email", email, Some(mail_id))
-            .await?;
-
-        let details = serde_json::from_str::<crate::EmailDetails>(&raw)?;
-        Ok(details)
+    pub async fn fetch_email(&self, email: &str, mail_id: &str) -> Result<EmailDetails> {
+        self.get_api("fetch_email", email, Some(mail_id)).await
     }
 
     /// List attachment metadata for a message.
@@ -412,7 +398,7 @@ impl Client {
         Ok(())
     }
 
-    /// Perform a common GuerrillaMail AJAX API call and return the raw JSON value.
+    /// Perform a common GuerrillaMail AJAX API call and decode its JSON response.
     ///
     /// This helper centralizes request construction for endpoints such as `check_email` and
     /// `fetch_email`. It injects a cache-busting timestamp parameter and ensures the correct
@@ -426,52 +412,24 @@ impl Client {
     /// # Errors
     /// Returns an error if the request fails, the server returns a non-success status,
     /// or the body cannot be parsed as JSON.
-    async fn get_api(
+    async fn get_api<T: DeserializeOwned>(
         &self,
         function: &str,
         email: &str,
         email_id: Option<&str>,
-    ) -> Result<serde_json::Value> {
+    ) -> Result<T> {
         let params = self.api_params(function, email, email_id)?;
 
-        let headers = self.ajax_headers_no_ct();
-
-        let response: serde_json::Value = self
+        Ok(self
             .http
             .get(self.ajax_url.as_str())
             .query(&params)
-            .headers(headers)
+            .headers(self.ajax_headers_no_ct())
             .send()
             .await?
             .error_for_status()?
             .json()
-            .await?;
-
-        Ok(response)
-    }
-
-    async fn get_api_text(
-        &self,
-        function: &str,
-        email: &str,
-        email_id: Option<&str>,
-    ) -> Result<String> {
-        let params = self.api_params(function, email, email_id)?;
-
-        let headers = self.ajax_headers_no_ct();
-
-        let response = self
-            .http
-            .get(self.ajax_url.as_str())
-            .query(&params)
-            .headers(headers)
-            .send()
-            .await?
-            .error_for_status()?
-            .text()
-            .await?;
-
-        Ok(response)
+            .await?)
     }
 
     /// Extract the alias (local-part) from a full email address.
