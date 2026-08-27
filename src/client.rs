@@ -401,9 +401,6 @@ impl Client {
     /// # Arguments
     /// - `email`: Full address to remove from the session.
     ///
-    /// # Returns
-    /// `true` when the HTTP response status is 2xx.
-    ///
     /// # Errors
     /// - Returns `Error::Request` for network failures or non-2xx responses from the `forget_me` call.
     ///
@@ -419,18 +416,16 @@ impl Client {
     /// # async fn main() -> Result<(), guerrillamail_client::Error> {
     /// let client = Client::new().await?;
     /// let email = client.create_email("myalias").await?;
-    /// let ok = client.delete_email(&email).await?;
-    /// println!("{ok}");
+    /// client.delete_email(&email).await?;
     /// # Ok(())
     /// # }
     /// ```
-    pub async fn delete_email(&self, email: &str) -> Result<bool> {
+    pub async fn delete_email(&self, email: &str) -> Result<()> {
         let alias = Self::extract_alias(email);
         let params = [("f", "forget_me")];
         let form = [("site", "guerrillamail.com"), ("in", alias)];
 
-        let response = self
-            .http
+        self.http
             .post(self.ajax_url.as_str())
             .query(&params)
             .form(&form)
@@ -439,7 +434,7 @@ impl Client {
             .await?
             .error_for_status()?;
 
-        Ok(response.status().is_success())
+        Ok(())
     }
 
     /// Perform a common GuerrillaMail AJAX API call and return the raw JSON value.
