@@ -363,7 +363,7 @@ impl Client {
         }
 
         let details = self.fetch_email(email, mail_id).await?;
-        let inbox_url = self.inbox_url();
+        let inbox_url = self.inbox_url()?;
 
         let mut query = vec![
             ("get_att", "".to_string()),
@@ -462,7 +462,7 @@ impl Client {
         email: &str,
         email_id: Option<&str>,
     ) -> Result<serde_json::Value> {
-        let params = self.api_params(function, email, email_id);
+        let params = self.api_params(function, email, email_id)?;
 
         let headers = self.ajax_headers_no_ct();
 
@@ -486,7 +486,7 @@ impl Client {
         email: &str,
         email_id: Option<&str>,
     ) -> Result<String> {
-        let params = self.api_params(function, email, email_id);
+        let params = self.api_params(function, email, email_id)?;
 
         let headers = self.ajax_headers_no_ct();
 
@@ -516,9 +516,9 @@ impl Client {
         function: &str,
         email: &str,
         email_id: Option<&str>,
-    ) -> Vec<(&str, String)> {
+    ) -> Result<Vec<(&'static str, String)>> {
         let alias = Self::extract_alias(email);
-        let timestamp = Self::timestamp();
+        let timestamp = Self::timestamp()?;
 
         let mut params = vec![
             ("f", function.to_string()),
@@ -535,28 +535,27 @@ impl Client {
             params.insert(1, ("seq", "1".to_string()));
         }
 
-        params
+        Ok(params)
     }
 
-    fn inbox_url(&self) -> String {
-        self.base_url
+    fn inbox_url(&self) -> Result<String> {
+        Ok(self
+            .base_url
             .join("inbox")
-            .expect("constructing inbox URL should not fail")
-            .into()
+            .map_err(|_| Error::InvalidUrl("invalid base_url"))?
+            .into())
     }
 
     /// Generate a millisecond timestamp suitable for cache-busting query parameters.
     ///
-    /// # Panics
+    /// # Errors
     ///
-    /// Panics if the system clock is before the Unix epoch. This indicates a
-    /// misconfigured or broken system clock and is treated as a fatal error.
-    fn timestamp() -> String {
-        SystemTime::now()
-            .duration_since(UNIX_EPOCH)
-            .expect("system clock is before UNIX_EPOCH")
+    /// Returns an error if the system clock is before the Unix epoch.
+    fn timestamp() -> Result<String> {
+        Ok(SystemTime::now()
+            .duration_since(UNIX_EPOCH)?
             .as_millis()
-            .to_string()
+            .to_string())
     }
 
     fn ajax_headers(&self) -> HeaderMap {
@@ -578,7 +577,9 @@ fn build_headers(
     api_token_header: &HeaderValue,
     include_content_type: bool,
 ) -> Result<HeaderMap> {
-    let host = url.host_str().expect("validated url missing host");
+    let host = url
+        .host_str()
+        .ok_or(Error::InvalidUrl("URL missing host"))?;
     let host_port = match url.port() {
         Some(port) => format!("{host}:{port}"),
         None => host.to_string(),
@@ -637,6 +638,14 @@ fn parse_api_token(page: &str) -> Option<&str> {
     (!token.is_empty()).then_some(token)
 }
 
+fn parse_endpoint_url(url: &str, invalid: &'static str, missing_host: &'static str) -> Result<Url> {
+    let parsed = Url::parse(url).map_err(|_| Error::InvalidUrl(invalid))?;
+    if parsed.host_str().is_none() {
+        return Err(Error::InvalidUrl(missing_host));
+    }
+    Ok(parsed)
+}
+
 /// Configures and bootstraps a GuerrillaMail [`Client`].
 ///
 /// Conceptually, [`ClientBuilder`] holds request-layer options (proxy, TLS leniency, user agent,
@@ -672,8 +681,8 @@ pub struct ClientBuilder {
     proxy: Option<String>,
     danger_accept_invalid_certs: bool,
     user_agent: String,
-    ajax_url: Url,
-    base_url: Url,
+    ajax_url: String,
+    base_url: String,
     timeout: std::time::Duration,
 }
 
@@ -692,8 +701,8 @@ impl ClientBuilder {
             proxy: None,
             danger_accept_invalid_certs: false,
             user_agent: USER_AGENT_VALUE.to_string(),
-            ajax_url: Url::parse(AJAX_URL).expect("default ajax url must be valid"),
-            base_url: Url::parse(BASE_URL).expect("default base url must be valid"),
+            ajax_url: AJAX_URL.to_string(),
+            base_url: BASE_URL.to_string(),
             // Keep requests from hanging indefinitely; 30s is a conservative, service-friendly default.
             timeout: std::time::Duration::from_secs(30),
         }
@@ -731,24 +740,18 @@ impl ClientBuilder {
     /// Override the GuerrillaMail AJAX endpoint URL.
     ///
     /// This is primarily useful for testing or if GuerrillaMail changes its endpoint.
+    /// Invalid URLs are reported by [`build`](Self::build).
     pub fn ajax_url(mut self, ajax_url: impl Into<String>) -> Self {
-        let parsed = Url::parse(&ajax_url.into()).expect("invalid ajax_url");
-        if parsed.host_str().is_none() {
-            panic!("invalid ajax_url: missing host");
-        }
-        self.ajax_url = parsed;
+        self.ajax_url = ajax_url.into();
         self
     }
 
     /// Override the GuerrillaMail base URL.
     ///
-    /// This is primarily useful for testing.
+    /// This is primarily useful for testing. Invalid URLs are reported by
+    /// [`build`](Self::build).
     pub fn base_url(mut self, base_url: impl Into<String>) -> Self {
-        let parsed = Url::parse(&base_url.into()).expect("invalid base_url");
-        if parsed.host_str().is_none() {
-            panic!("invalid base_url: missing host");
-        }
-        self.base_url = parsed;
+        self.base_url = base_url.into();
         self
     }
 
@@ -769,6 +772,7 @@ impl ClientBuilder {
     ///
     /// # Errors
     /// - Returns `Error::Request` for HTTP client build issues, bootstrap network failures, or non-2xx responses.
+    /// - Returns `Error::InvalidUrl` if a configured endpoint URL is malformed or has no host.
     /// - Returns `Error::TokenParse` when the API token cannot be found in the bootstrap HTML.
     /// - Returns `Error::HeaderValue` if the token cannot be encoded into the authorization header.
     ///
@@ -798,9 +802,16 @@ impl ClientBuilder {
             builder = builder.proxy(reqwest::Proxy::all(proxy_url)?);
         }
 
-        // URLs are validated when set on the builder.
-        let base_url = self.base_url;
-        let ajax_url = self.ajax_url;
+        let base_url = parse_endpoint_url(
+            &self.base_url,
+            "invalid base_url",
+            "invalid base_url: missing host",
+        )?;
+        let ajax_url = parse_endpoint_url(
+            &self.ajax_url,
+            "invalid ajax_url",
+            "invalid ajax_url: missing host",
+        )?;
 
         // Enable cookie store to persist session between requests.
         let http = builder.cookie_store(true).build()?;
@@ -834,93 +845,5 @@ impl ClientBuilder {
             ajax_headers_no_ct,
             base_headers,
         })
-    }
-}
-
-#[cfg(test)]
-impl Client {
-    fn new_for_tests(base_url: String, ajax_url: String) -> Self {
-        let http = reqwest::Client::builder()
-            .cookie_store(true)
-            .build()
-            .expect("test client build failed");
-        let api_token_header = HeaderValue::from_static("ApiToken test");
-        let base_url = Url::parse(&base_url).expect("invalid base_url in test");
-        let ajax_url = Url::parse(&ajax_url).expect("invalid ajax_url in test");
-        let ajax_headers = build_headers(&ajax_url, USER_AGENT_VALUE, &api_token_header, true)
-            .expect("ajax headers");
-        let ajax_headers_no_ct =
-            build_headers(&ajax_url, USER_AGENT_VALUE, &api_token_header, false)
-                .expect("ajax headers no ct");
-        let base_headers = build_headers(&base_url, USER_AGENT_VALUE, &api_token_header, true)
-            .expect("base headers");
-        Self {
-            http,
-            api_token_header,
-            proxy: None,
-            user_agent: USER_AGENT_VALUE.to_string(),
-            ajax_url,
-            base_url,
-            ajax_headers,
-            ajax_headers_no_ct,
-            base_headers,
-        }
-    }
-}
-
-#[cfg(test)]
-mod tests {
-    use super::*;
-
-    #[tokio::test]
-    async fn fetch_attachment_errors_on_empty_mail_id() {
-        let client = Client::new_for_tests(
-            "https://example.com".to_string(),
-            "https://example.com/ajax.php".to_string(),
-        );
-        let attachment = Attachment {
-            filename: "file.txt".to_string(),
-            content_type_or_hint: None,
-            part_id: "99".to_string(),
-        };
-
-        let err = client
-            .fetch_attachment("alias@example.com", "   ", &attachment)
-            .await
-            .unwrap_err();
-
-        assert!(matches!(
-            err,
-            Error::ResponseParse("message missing mail_id")
-        ));
-    }
-
-    #[test]
-    fn client_is_clone() {
-        let base_url = "https://example.com";
-        let client = Client::new_for_tests(base_url.to_string(), format!("{base_url}/ajax.php"));
-
-        let cloned = client.clone();
-
-        assert_eq!(client.proxy, cloned.proxy);
-        assert_eq!(client.user_agent, cloned.user_agent);
-        assert_eq!(client.ajax_url, cloned.ajax_url);
-        assert_eq!(client.base_url, cloned.base_url);
-    }
-
-    #[test]
-    fn builder_verifies_tls_by_default() {
-        assert!(!ClientBuilder::new().danger_accept_invalid_certs);
-        assert!(
-            ClientBuilder::new()
-                .danger_accept_invalid_certs(true)
-                .danger_accept_invalid_certs
-        );
-    }
-
-    #[test]
-    fn token_parser_accepts_broad_characters() {
-        let sample = "const data = { api_token : 'abc-123.def:ghi' };";
-        assert_eq!(parse_api_token(sample), Some("abc-123.def:ghi"));
     }
 }

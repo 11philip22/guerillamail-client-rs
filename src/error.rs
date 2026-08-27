@@ -45,4 +45,12 @@ pub enum Error {
     /// partially returned / malformed payload.
     #[error("JSON parsing error: {0}")]
     Json(#[from] serde_json::Error),
+
+    /// A configured endpoint URL is invalid or missing a host.
+    #[error("Invalid URL: {0}")]
+    InvalidUrl(&'static str),
+
+    /// The system clock is before the Unix epoch.
+    #[error("System clock is before UNIX_EPOCH: {0}")]
+    Clock(#[from] std::time::SystemTimeError),
 }
