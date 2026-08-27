@@ -43,7 +43,7 @@ forgets addresses when the workflow is done.
 - Async-first API built on `tokio` and `reqwest`.
 - Create disposable email addresses from aliases.
 - Poll inboxes and fetch full message contents.
-- List and download message attachments.
+- Inspect and download message attachments.
 - Forget addresses for the current GuerrillaMail session.
 - Configure proxy, TLS behavior, user agent, endpoints, and request timeout.
 - Typed response models and a crate-wide `Result<T>` alias.
@@ -54,7 +54,7 @@ Add the crate and a Tokio runtime to your `Cargo.toml`:
 
 ```toml
 [dependencies]
-guerrillamail-client = "0.7.2"
+guerrillamail-client = "0.8.0"
 tokio = { version = "1", features = ["macros", "rt-multi-thread"] }
 ```
 
@@ -120,7 +120,7 @@ async fn main() -> Result<(), guerrillamail_client::Error> {
 
 ## Configuration
 
-Use the builder when you need traffic inspection, stricter TLS verification, a
+Use the builder when you need traffic inspection, relaxed TLS verification, a
 custom user agent, test endpoints, or a different timeout.
 
 For SOCKS proxies, enable the crate's `socks` feature.
@@ -132,7 +132,7 @@ use std::time::Duration;
 let client = Client::builder()
     .proxy("http://127.0.0.1:8080")
     .user_agent("my-app/1.0")
-    .timeout(std::time::Duration::from_secs(30)) // default is 30s; customize as needed
+    .timeout(Duration::from_secs(30)) // default is 30s; customize as needed
     .build()
     .await?;
 ```
